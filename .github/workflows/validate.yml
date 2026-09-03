@@ -6,6 +6,9 @@ on:
   pull_request:
   schedule:
     - cron: "0 6 * * *"
+  # HACS validation checks repository metadata (topics, description, brands),
+  # which changes outside a commit -- so it must be re-runnable without one.
+  workflow_dispatch:
 
 jobs:
   hacs:
