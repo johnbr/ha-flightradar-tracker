@@ -12,18 +12,10 @@
  * and a full stop for the next.
  */
 
-export type AltitudeUnit = "ft" | "m";
-export type SpeedUnit = "mph" | "kts" | "kmh";
-export type DistanceUnit = "mi" | "km" | "nm";
-
-export interface Units {
-  altitude: AltitudeUnit;
-  speed: SpeedUnit;
-  distance: DistanceUnit;
-}
-
-/** The house is imperial; the sensor is not. */
-export const DEFAULT_UNITS: Units = { altitude: "ft", speed: "mph", distance: "mi" };
+// Type-only, so this module still imports nothing at runtime and `node --test`
+// can type-strip it. The unit vocabulary lives with the config schema that
+// validates it.
+import type { AltitudeUnit, DistanceUnit, SpeedUnit } from "./config";
 
 const FT_TO_M = 0.3048;
 const KTS_TO_MPH = 1.15078;

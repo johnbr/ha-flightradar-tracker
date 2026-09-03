@@ -11,7 +11,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseConfig } from "../src/config.ts";
+import { parseConfig, resolveConfig } from "../src/config.ts";
 
 test("a minimal config round-trips unchanged", () => {
   const parsed = parseConfig({ type: "custom:flight-map-card", entity: "sensor.flightradar24_current_in_area" });
@@ -81,4 +81,80 @@ test("title must be a string", () => {
 
 test("type defaults to the card's own type when Lovelace has not set it", () => {
   assert.equal(parseConfig({ entity: "sensor.x" }).type, "custom:flight-map-card");
+});
+
+/**
+ * The rest of the option surface.
+ *
+ * Same rule throughout: a wrong value throws rather than becoming the default.
+ * Silent fallbacks are what made the card this one replaces impossible to
+ * configure with confidence.
+ */
+
+test("numeric options are bounded, not merely numeric", () => {
+  assert.equal(parseConfig({ entity: "sensor.x", map_height: 500 }).map_height, 500);
+  assert.equal(parseConfig({ entity: "sensor.x", icon_size: 40 }).icon_size, 40);
+  assert.equal(parseConfig({ entity: "sensor.x", zoom: 11 }).zoom, 11);
+
+  // A card one pixel tall, or an aircraft the size of the county.
+  assert.throws(() => parseConfig({ entity: "sensor.x", map_height: 1 }), /between 120 and 1200/);
+  assert.throws(() => parseConfig({ entity: "sensor.x", icon_size: 400 }), /between 12 and 72/);
+  assert.throws(() => parseConfig({ entity: "sensor.x", zoom: 0 }), /between 1 and 20/);
+  // "380px" is the natural typo, and Number("380px") is NaN.
+  assert.throws(() => parseConfig({ entity: "sensor.x", map_height: "380px" }), /must be a number/);
+  assert.throws(() => parseConfig({ entity: "sensor.x", map_height: Number.NaN }), /must be a number/);
+});
+
+test("booleans must be booleans, not truthy strings", () => {
+  assert.equal(parseConfig({ entity: "sensor.x", show_tracks: false }).show_tracks, false);
+  // `show_tracks: "false"` is truthy in JavaScript. Accepting it would turn the
+  // option on when the config says off -- the exact silent-default failure.
+  assert.throws(() => parseConfig({ entity: "sensor.x", show_tracks: "false" }), /must be true or false/);
+  assert.throws(() => parseConfig({ entity: "sensor.x", show_photo: 1 }), /must be true or false/);
+});
+
+test("units accept only real units", () => {
+  assert.deepEqual(parseConfig({ entity: "sensor.x", units: { distance: "nm" } }).units, {
+    distance: "nm",
+  });
+  assert.throws(() => parseConfig({ entity: "sensor.x", units: { distance: "miles" } }), /must be one of/);
+  assert.throws(() => parseConfig({ entity: "sensor.x", units: { height: "ft" } }), /Unknown unit "height"/);
+  assert.throws(() => parseConfig({ entity: "sensor.x", units: "metric" }), /must be a mapping/);
+  // knots for speed is valid; knots for distance is not.
+  assert.equal(parseConfig({ entity: "sensor.x", units: { speed: "kts" } }).units?.speed, "kts");
+  assert.throws(() => parseConfig({ entity: "sensor.x", units: { distance: "kts" } }), /must be one of/);
+});
+
+test("parsing does not invent values; resolving fills them in", () => {
+  // Kept apart so the editor can tell what the user wrote from what the card
+  // assumed, and never writes a default back into the dashboard YAML.
+  const parsed = parseConfig({ entity: "sensor.x" });
+  assert.equal(parsed.map_height, undefined);
+  assert.equal(parsed.show_tracks, undefined);
+
+  const resolved = resolveConfig(parsed);
+  assert.equal(resolved.map_height, 380);
+  assert.equal(resolved.icon_size, 28);
+  assert.equal(resolved.show_tracks, true);
+  assert.equal(resolved.show_area_center, true);
+  assert.equal(resolved.show_photo, true);
+  assert.deepEqual(resolved.units, { altitude: "ft", speed: "mph", distance: "mi" });
+  // Absent stays absent: there is no default title or zoom to invent.
+  assert.equal("title" in resolved, false);
+  assert.equal("zoom" in resolved, false);
+});
+
+test("a partial units mapping keeps the other two defaults", () => {
+  const resolved = resolveConfig(parseConfig({ entity: "sensor.x", units: { distance: "km" } }));
+  assert.deepEqual(resolved.units, { altitude: "ft", speed: "mph", distance: "km" });
+});
+
+test("explicit values survive resolution", () => {
+  const resolved = resolveConfig(
+    parseConfig({ entity: "sensor.x", map_height: 240, show_tracks: false, zoom: 9, title: "Overhead" })
+  );
+  assert.equal(resolved.map_height, 240);
+  assert.equal(resolved.show_tracks, false);
+  assert.equal(resolved.zoom, 9);
+  assert.equal(resolved.title, "Overhead");
 });

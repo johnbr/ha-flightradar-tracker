@@ -9,7 +9,14 @@
 
 import { LitElement, html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
-import { CARD_TYPE, parseConfig, type ParsedConfig } from "./config";
+import {
+  CARD_TYPE,
+  DEFAULTS,
+  EDITOR_TYPE,
+  parseConfig,
+  resolveConfig,
+  type ResolvedConfig,
+} from "./config";
 import { diffFlights, flightLabel, indexById, isHelicopter, isOnGround, parseFlights } from "./flights";
 import { boundsCenter, boundsCorners, parseBounds, type AreaBounds } from "./geo";
 import {
@@ -24,7 +31,6 @@ import {
   type LeafletPolyline,
 } from "./ha-map";
 import { renderDetail, renderEmptyDetail } from "./detail";
-import { DEFAULT_UNITS } from "./format";
 import { aircraftIcon, type AircraftIconStyle, type AircraftShape } from "./markers";
 import { cardStyles } from "./styles";
 import type { Flight, HassEntity, HomeAssistant } from "./types";
@@ -43,9 +49,6 @@ const VERSION = new URL(import.meta.url).searchParams.get("v") ?? "dev";
 
 const DOCS = "https://github.com/johnbr/ha-flightradar-tracker";
 
-/** Map frame height in pixels. Becomes the `map_height` option in M6. */
-const MAP_HEIGHT = 380;
-
 /**
  * Padding around the fitted area, as a fraction of its own extent.
  *
@@ -55,13 +58,9 @@ const MAP_HEIGHT = 380;
  */
 const FIT_PAD = 0.05;
 
-/** Aircraft icon box in pixels. Becomes the `icon_size` option in M6. */
-const ICON_SIZE = 28;
-
 /**
  * Track line weight and opacity. Deliberately faint: eleven 50-point trails is
  * the normal case here, and they are context for the aircraft, not the subject.
- * Becomes the `show_tracks` option in M6.
  */
 const TRACK_WEIGHT = 2;
 const TRACK_OPACITY = 0.45;
@@ -139,7 +138,7 @@ export class FlightMapCard extends LitElement {
    */
   private _signature = "";
 
-  @state() private _config?: ParsedConfig;
+  @state() private _config?: ResolvedConfig;
   /** null while the lazy `ha-map` chunk is still being fetched. */
   @state() private _mapAvailable: boolean | null = null;
   /** The flight id whose detail is on screen, if any. */
@@ -210,12 +209,41 @@ export class FlightMapCard extends LitElement {
   }
 
   setConfig(config: unknown): void {
-    this._config = parseConfig(config);
+    this._config = resolveConfig(parseConfig(config));
     this._signature = this._computeSignature();
+    // Options like icon_size or show_tracks change how everything is drawn, and
+    // the per-tick diff would report no change at all -- so the layers are
+    // emptied and rebuilt from scratch. Config edits are rare; this is not a
+    // hot path.
+    this._resetDrawing();
+  }
+
+  static async getConfigElement(): Promise<HTMLElement> {
+    await import("./editor");
+    return document.createElement(EDITOR_TYPE);
+  }
+
+  /**
+   * The config the card picker starts you with.
+   *
+   * Only the four area sensors carry `attributes.flights[]`; the `airport_*`
+   * ones would render an empty card, so they are never offered.
+   */
+  static getStubConfig(_hass: HomeAssistant, entities: string[]): Record<string, unknown> {
+    const areas = ["current_in_area", "entered_area", "exited_area", "additional_tracked"];
+    const candidate =
+      entities.find((id) => id.startsWith("sensor.") && areas.some((suffix) => id.endsWith(suffix))) ??
+      entities.find((id) => id.startsWith("sensor.") && id.includes("flightradar"));
+    return { type: `custom:${CARD_TYPE}`, entity: candidate ?? "" };
   }
 
   getCardSize(): number {
     return 8;
+  }
+
+  /** Sections view: a map wants width, and its height is its own business. */
+  getGridOptions(): Record<string, unknown> {
+    return { columns: 12, min_columns: 6, rows: "auto", min_rows: 6 };
   }
 
   connectedCallback(): void {
@@ -248,6 +276,18 @@ export class FlightMapCard extends LitElement {
 
   protected updated(_changed: PropertyValues): void {
     void this._syncMap();
+  }
+
+  /** Empty every layer and forget what was drawn, so the next sync rebuilds. */
+  private _resetDrawing(): void {
+    this._endGlide();
+    this._baseLayer?.clearLayers();
+    this._trackLayer?.clearLayers();
+    this._markerLayer?.clearLayers();
+    this._centreMarker = undefined;
+    this._markers.clear();
+    this._tracks.clear();
+    this._drawn.clear();
   }
 
   private _computeSignature(): string {
@@ -464,7 +504,7 @@ export class FlightMapCard extends LitElement {
     const existing = this._tracks.get(flight.id);
 
     // One point is a dot, not a trail, and reads as a rendering fault.
-    if (points.length < 2) {
+    if (points.length < 2 || !this._config?.show_tracks) {
       if (existing) {
         layer.removeLayer(existing);
         this._tracks.delete(flight.id);
@@ -497,7 +537,7 @@ export class FlightMapCard extends LitElement {
 
   private _iconStyle(): AircraftIconStyle {
     return {
-      size: ICON_SIZE,
+      size: this._config?.icon_size ?? DEFAULTS.icon_size,
       // The text colour tracks the theme, and ha-map switches its tiles with
       // the same theme, so the silhouette stays legible in both.
       color: this._themeColor("--primary-text-color", "#212121"),
@@ -591,7 +631,7 @@ export class FlightMapCard extends LitElement {
   /** A small marker at the centre of the watched area. */
   private _drawAreaCentre(leaflet: LeafletLike): void {
     const bounds = this._bounds();
-    if (!bounds || !this._baseLayer) return;
+    if (!bounds || !this._baseLayer || !this._config?.show_area_center) return;
     const at = boundsCenter(bounds);
 
     if (this._centreMarker) {
@@ -631,6 +671,11 @@ export class FlightMapCard extends LitElement {
     // it had before.
     el.leafletMap?.invalidateSize(false);
     el.fitBounds(boundsCorners(bounds), { pad: FIT_PAD });
+    // A configured zoom overrides the fit, but only its scale: the fit above
+    // has already centred on the watched area, and ha-map zooms about the
+    // current centre.
+    const zoom = this._config?.zoom;
+    if (zoom !== undefined) el.zoom = zoom;
   }
 
   private _onRecentre = (): void => {
@@ -639,16 +684,19 @@ export class FlightMapCard extends LitElement {
   };
 
   private _renderMap(): TemplateResult {
+    // A custom property rather than a height, so the narrow-screen cap in the
+    // stylesheet can read it -- an inline height would beat any media query.
+    const frame = `--fmc-map-height:${this._config?.map_height ?? DEFAULTS.map_height}px`;
     if (this._mapAvailable === null) {
-      return html`<div class="placeholder" style="height:${MAP_HEIGHT}px">Loading map…</div>`;
+      return html`<div class="placeholder" style=${frame}>Loading map…</div>`;
     }
     if (!this._mapAvailable) {
-      return html`<div class="placeholder error" style="height:${MAP_HEIGHT}px">
+      return html`<div class="placeholder error" style=${frame}>
         Map unavailable — Home Assistant's map component did not load.
       </div>`;
     }
     return html`
-      <div class="map-wrap" style="height:${MAP_HEIGHT}px">
+      <div class="map-wrap" style=${frame}>
         <ha-map .autoFit=${false} .themeMode=${"auto"}></ha-map>
         <button class="recentre" title="Recentre on the watched area" @click=${this._onRecentre}>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d=${RECENTRE_PATH}></path></svg>
@@ -662,7 +710,9 @@ export class FlightMapCard extends LitElement {
     const flight = id ? this._flights().find((f) => f.id === id) : undefined;
     // Reading the flight out of the CURRENT tick, not out of `_drawn`: the
     // panel must show live telemetry, not whatever it said when it was tapped.
-    return flight ? renderDetail(flight, DEFAULT_UNITS, this._hour12()) : renderEmptyDetail();
+    return flight && this._config
+      ? renderDetail(flight, this._config, this._hour12())
+      : renderEmptyDetail();
   }
 
   /**

@@ -43,8 +43,25 @@ export const cardStyles = css`
    * its own touch handling, and "touch-action: none" is what cost the
    * air-quality card pinch-zoom across the whole dashboard.
    */
+  .map-wrap,
+  .placeholder {
+    height: var(--fmc-map-height, 380px);
+  }
+
   .map-wrap {
     position: relative;
+  }
+
+  /*
+   * On a phone the configured height is usually somebody's desktop number, and
+   * a 380 px map plus a detail panel is most of the screen. Cap it rather than
+   * override it, so a deliberately short map stays short.
+   */
+  @media (max-width: 699px) {
+    .map-wrap,
+    .placeholder {
+      height: min(var(--fmc-map-height, 380px), 300px);
+    }
   }
 
   ha-map {

@@ -41,7 +41,7 @@ Under construction, milestone by milestone.
 - [x] **M3** — track polylines
 - [x] **M4** — selection and the detail panel
 - [x] **M5** — route block with airport-local times, progress bar
-- [ ] **M6** — units, visual editor
+- [x] **M6** — units, visual editor
 - [ ] **M7** — docs and first release
 
 ## Installation
@@ -71,8 +71,21 @@ title: Flights overhead
 |---|---|---|---|
 | `entity` | string | **required** | The Flightradar24 area sensor carrying `attributes.flights[]` |
 | `title` | string | the entity's friendly name | Header text |
+| `map_height` | number | `380` | Map frame height in px (120–1200). Capped at 300 px under a 700 px viewport |
+| `zoom` | number | — | Fixes the zoom (1–20) instead of fitting the watched area. The map still centres on the area |
+| `icon_size` | number | `28` | Aircraft icon box in px (12–72) |
+| `show_tracks` | boolean | `true` | Draw each aircraft's recent track |
+| `show_area_center` | boolean | `true` | Mark the centre of the watched area |
+| `show_photo` | boolean | `true` | Show the aircraft photo in the detail panel |
+| `units.altitude` | `ft` \| `m` | `ft` | |
+| `units.speed` | `mph` \| `kts` \| `kmh` | `mph` | |
+| `units.distance` | `mi` \| `km` \| `nm` | `mi` | |
 
-More options arrive with the milestones above.
+There is a visual editor, so none of this has to be typed by hand.
+
+**Every option is validated and a bad value throws** — an unknown key, a number
+out of range, `show_tracks: "false"` (a truthy string), or `units.distance: miles`
+all produce a card that says what is wrong. Nothing silently becomes a default.
 
 ### Which entity
 

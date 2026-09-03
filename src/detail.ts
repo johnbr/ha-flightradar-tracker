@@ -25,8 +25,8 @@ import {
   formatSquawk,
   formatVerticalSpeed,
   fr24Url,
-  type Units,
 } from "./format";
+import type { ResolvedConfig, Units } from "./config";
 import { airportPosition, routeProgress } from "./geo";
 import type { Flight } from "./types";
 
@@ -200,8 +200,9 @@ export function renderEmptyDetail(): TemplateResult {
   return html`<div class="detail empty">Tap an aircraft on the map</div>`;
 }
 
-export function renderDetail(flight: Flight, units: Units, hour12: boolean): TemplateResult {
-  const photo = photoUrl(flight);
+export function renderDetail(flight: Flight, config: ResolvedConfig, hour12: boolean): TemplateResult {
+  const units = config.units;
+  const photo = config.show_photo ? photoUrl(flight) : null;
   const link = fr24Url(flight.id, flightTitle(flight));
   const sub = subtitle(flight);
 
