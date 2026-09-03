@@ -1,0 +1,38 @@
+{
+  "name": "ha-flight-map-card",
+  "version": "0.1.0",
+  "description": "Home Assistant Lovelace card: an interactive map of the aircraft overhead, tap one for its full detail. Reads the Flightradar24 integration's area sensor.",
+  "type": "module",
+  "main": "dist/flight-map-card.js",
+  "scripts": {
+    "build": "rollup -c",
+    "watch": "rollup -c -w",
+    "typecheck": "tsc --noEmit",
+    "test:js": "TZ=UTC node --test tests/*.test.ts"
+  },
+  "keywords": [
+    "home-assistant",
+    "lovelace",
+    "hacs",
+    "flightradar24",
+    "flights",
+    "map"
+  ],
+  "author": "John Briscoe",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/johnbr/ha-flight-map-card.git"
+  },
+  "dependencies": {
+    "lit": "^3.2.0"
+  },
+  "devDependencies": {
+    "@rollup/plugin-node-resolve": "^16.0.0",
+    "@rollup/plugin-terser": "^1.0.0",
+    "@rollup/plugin-typescript": "^12.1.0",
+    "rollup": "^4.24.0",
+    "tslib": "^2.8.0",
+    "typescript": "^5.6.0"
+  }
+}

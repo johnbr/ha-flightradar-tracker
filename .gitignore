@@ -1,0 +1,14 @@
+# JS toolchain
+node_modules/
+
+# Tooling caches
+.rollup.cache/
+*.tsbuildinfo
+
+# Local working context, not in-repo
+CLAUDE.md
+PLAN.md
+
+# NOTE: dist/flight-map-card.js is deliberately COMMITTED -- HACS installs
+# straight from the repository, so a gitignored bundle means a HACS install
+# ships no card at all. CI checks it matches a fresh build.

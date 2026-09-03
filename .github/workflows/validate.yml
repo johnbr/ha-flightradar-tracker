@@ -1,0 +1,41 @@
+name: Validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * *"
+
+jobs:
+  hacs:
+    name: HACS validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hacs/action@main
+        with:
+          category: plugin
+          # `brands`: dropped once the home-assistant/brands PR lands.
+          # `images`: dropped once a real screenshot is added to README.
+          ignore: brands images
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      # Node 22 strips TypeScript natively, so the import-free modules are
+      # tested from source with no build step.
+      - run: npm run test:js
+      - run: npm run build
+      # The committed bundle is what HACS installs, so it must be the one these
+      # sources produce -- a stale dist/ ships a card nobody can reproduce.
+      - name: Committed bundle must match a fresh build
+        run: git diff --exit-code dist/
