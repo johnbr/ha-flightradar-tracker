@@ -26,6 +26,7 @@ const KNOWN_KEYS = new Set([
   "title",
   "map_height",
   "zoom",
+  "zoom_offset",
   "show_tracks",
   "show_area_center",
   "show_photo",
@@ -63,10 +64,24 @@ const LIMITS = {
   map_height: [120, 1200],
   icon_size: [12, 72],
   zoom: [1, 20],
+  // Bounded well inside the point where the fit padding would invert the
+  // bounds (it approaches -0.5 as the offset grows, never reaching it), and
+  // at +3 you are already seeing under a seventh of the watched area.
+  zoom_offset: [-2, 3],
 } as const;
 
 export const DEFAULTS = {
-  map_height: 380,
+  map_height: 460,
+  /**
+   * One level tighter than fitting the watched area exactly.
+   *
+   * The area is a wide box -- fitting all of it puts every aircraft in the
+   * middle third of the map at a size where the heading is unreadable. One
+   * step in is the useful default, and the cost is explicit rather than
+   * hidden: the map then shows a bit over half the box, so aircraft near its
+   * edge are off screen until the view is panned. Set 0 to see all of it.
+   */
+  zoom_offset: 1,
   show_tracks: true,
   show_area_center: true,
   show_photo: true,
@@ -84,6 +99,8 @@ export interface ParsedConfig {
   map_height?: number;
   /** Fixes the zoom instead of fitting the watched area. */
   zoom?: number;
+  /** Zoom levels to tighten the area fit by. Ignored when `zoom` is set. */
+  zoom_offset?: number;
   show_tracks?: boolean;
   show_area_center?: boolean;
   show_photo?: boolean;
@@ -98,6 +115,7 @@ export interface ResolvedConfig {
   title?: string;
   map_height: number;
   zoom?: number;
+  zoom_offset: number;
   show_tracks: boolean;
   show_area_center: boolean;
   show_photo: boolean;
@@ -133,13 +151,20 @@ export function parseConfig(raw: unknown): ParsedConfig {
   };
   if (title !== undefined) parsed.title = title;
 
-  for (const key of ["map_height", "icon_size", "zoom"] as const) {
+  for (const key of ["map_height", "icon_size", "zoom", "zoom_offset"] as const) {
     const value = cfg[key];
     if (value === undefined) continue;
     const [min, max] = LIMITS[key];
     if (typeof value !== "number" || !Number.isFinite(value)) fail(`\`${key}\` must be a number`);
     if ((value as number) < min || (value as number) > max) {
       fail(`\`${key}\` must be between ${min} and ${max}, got ${value as number}`);
+    }
+    // Only whole levels for the offset. Leaflet snaps the fit to an integer
+    // zoom, so a fractional offset would land on one level or the next
+    // depending on the viewport -- silently not what was asked for, which is
+    // the whole failure mode this parser exists to prevent.
+    if (key === "zoom_offset" && !Number.isInteger(value)) {
+      fail("`zoom_offset` must be a whole number of zoom levels");
     }
     parsed[key] = value as number;
   }
@@ -190,6 +215,7 @@ export function resolveConfig(parsed: ParsedConfig): ResolvedConfig {
     show_area_center: parsed.show_area_center ?? DEFAULTS.show_area_center,
     show_photo: parsed.show_photo ?? DEFAULTS.show_photo,
     icon_size: parsed.icon_size ?? DEFAULTS.icon_size,
+    zoom_offset: parsed.zoom_offset ?? DEFAULTS.zoom_offset,
     units: { ...DEFAULT_UNITS, ...parsed.units },
   };
   if (parsed.title !== undefined) resolved.title = parsed.title;

@@ -45,7 +45,7 @@ export const cardStyles = css`
    */
   .map-wrap,
   .placeholder {
-    height: var(--fmc-map-height, 380px);
+    height: var(--fmc-map-height, 460px);
   }
 
   .map-wrap {
@@ -54,13 +54,13 @@ export const cardStyles = css`
 
   /*
    * On a phone the configured height is usually somebody's desktop number, and
-   * a 380 px map plus a detail panel is most of the screen. Cap it rather than
+   * a 460 px map plus a detail panel is most of the screen. Cap it rather than
    * override it, so a deliberately short map stays short.
    */
   @media (max-width: 699px) {
     .map-wrap,
     .placeholder {
-      height: min(var(--fmc-map-height, 380px), 300px);
+      height: min(var(--fmc-map-height, 460px), 300px);
     }
   }
 

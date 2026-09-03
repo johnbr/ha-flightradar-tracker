@@ -18,7 +18,7 @@ import {
   type ResolvedConfig,
 } from "./config";
 import { diffFlights, flightLabel, indexById, isHelicopter, isOnGround, parseFlights } from "./flights";
-import { boundsCenter, boundsCorners, parseBounds, type AreaBounds } from "./geo";
+import { boundsCenter, boundsCorners, padForZoomOffset, parseBounds, type AreaBounds } from "./geo";
 import {
   ensureHaMap,
   whenMapReady,
@@ -670,7 +670,10 @@ export class FlightMapCard extends LitElement {
     // frame that has just been laid out would otherwise be fitted at the size
     // it had before.
     el.leafletMap?.invalidateSize(false);
-    el.fitBounds(boundsCorners(bounds), { pad: FIT_PAD });
+    // A positive offset tightens the fit by whole zoom levels; see
+    // padForZoomOffset for why this is padding rather than a zoom assignment.
+    const offset = this._config?.zoom_offset ?? DEFAULTS.zoom_offset;
+    el.fitBounds(boundsCorners(bounds), { pad: padForZoomOffset(FIT_PAD, offset) });
     // A configured zoom overrides the fit, but only its scale: the fit above
     // has already centred on the watched area, and ha-map zooms about the
     // current centre.

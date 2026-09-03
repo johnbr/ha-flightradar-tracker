@@ -84,9 +84,25 @@ title: Flights overhead
 |---|---|---|---|
 | `entity` | string | **required** | The Flightradar24 area sensor carrying `attributes.flights[]` |
 | `title` | string | the entity's friendly name | Header text |
-| `map_height` | number | `380` | Map frame height in px (120–1200). Capped at 300 px under a 700 px viewport |
+| `map_height` | number | `460` | Map frame height in px (120–1200). Capped at 300 px under a 700 px viewport |
 | `zoom` | number | — | Fixes the zoom (1–20) instead of fitting the watched area. The map still centres on the area |
+| `zoom_offset` | number | `1` | Whole zoom levels to tighten the area fit by (−2–3). **A positive value crops the area** — see below. Ignored when `zoom` is set |
 | `icon_size` | number | `28` | Aircraft icon box in px (12–72) |
+
+### About `zoom_offset`
+
+The card fits the box the integration watches. That box is wide, so fitting all of it puts every
+aircraft in the middle of the map at a size where the heading arrow is hard to read — which is why
+the default is one level tighter rather than an exact fit.
+
+The cost is real and worth stating plainly: **at the default the map shows a bit over half the
+watched area's width**, so an aircraft near the edge of the box is off screen until you pan to it.
+It is still tracked, still in the marker set, and the recentre button brings the whole area back.
+Set `zoom_offset: 0` to see the entire area at once, which is exactly the fit the card used before
+this option existed.
+
+It moves the fit by *whole* zoom levels, so a fractional value is rejected rather than quietly
+rounded. `zoom` (a fixed zoom) overrides it entirely.
 | `show_tracks` | boolean | `true` | Draw each aircraft's recent track |
 | `show_area_center` | boolean | `true` | Mark the centre of the watched area |
 | `show_photo` | boolean | `true` | Show the aircraft photo in the detail panel |

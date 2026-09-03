@@ -127,3 +127,38 @@ export function airportPosition(lat: number | null, lon: number | null): LatLon 
   if (lat === 0 && lon === 0) return null;
   return [lat, lon];
 }
+
+/**
+ * The `pad` that fits the watched area `offset` zoom levels tighter than
+ * `basePad` alone would.
+ *
+ * `ha-map` fits `latLngBounds(corners).pad(pad)`, so the span it must fit is
+ * `(1 + 2 * pad)` times the watched box, and one zoom level is exactly a
+ * halving of that span. Solving `(1 + 2 * p) = (1 + 2 * basePad) * 2^-offset`
+ * therefore lands exactly `offset` INTEGER levels in: Leaflet floors the
+ * continuous fit to a whole zoom, and `floor(z + n) === floor(z) + n` for
+ * integer `n`.
+ *
+ * Expressed as padding rather than by reading the resulting zoom back and
+ * adding to it, for two reasons that are both real:
+ *
+ * 1. The read-back is unreliable. `ha-map.fitBounds` calls `_deferIfUnsized`
+ *    and re-queues the whole fit when the map has no layout yet, so the zoom
+ *    immediately afterwards can still be the previous view's.
+ * 2. Assigning `el.zoom` would ALSO cap every later fit. `ha-map` passes that
+ *    property straight through as Leaflet's `maxZoom`
+ *    (`{maxZoom: options?.zoom || this.zoom}`), so a zoom stored to bias one
+ *    fit silently becomes a ceiling on the next one.
+ *
+ * A negative result is normal and means the fit crops the area, which is what
+ * a positive offset asks for. It approaches -0.5 as the offset grows but never
+ * reaches it, so the padded bounds cannot invert.
+ */
+export function padForZoomOffset(basePad: number, offset: number): number {
+  // Short-circuited rather than left to the arithmetic, which returns
+  // 0.050000000000000044 for a base of 0.05: harmless in effect, but this way
+  // `zoom_offset: 0` provably reproduces the plain area fit rather than merely
+  // matching it to within a rounding error.
+  if (offset === 0) return basePad;
+  return ((1 + 2 * basePad) * 2 ** -offset - 1) / 2;
+}

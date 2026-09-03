@@ -24,6 +24,7 @@ const LABELS: Record<string, string> = {
   title: "Title",
   map_height: "Map height",
   zoom: "Fixed zoom (overrides the area fit)",
+  zoom_offset: "Zoom in beyond the area fit (levels)",
   icon_size: "Aircraft icon size",
   show_tracks: "Show tracks",
   show_area_center: "Mark the area centre",
@@ -51,6 +52,7 @@ const SCHEMA = [
         selector: { number: { min: 120, max: 1200, step: 10, mode: "box", unit_of_measurement: "px" } },
       },
       { name: "zoom", selector: { number: { min: 1, max: 20, step: 1, mode: "box" } } },
+      { name: "zoom_offset", selector: { number: { min: -2, max: 3, step: 1, mode: "box" } } },
       {
         name: "icon_size",
         selector: { number: { min: 12, max: 72, step: 1, mode: "box", unit_of_measurement: "px" } },
@@ -208,8 +210,9 @@ export class FlightMapCardEditor extends LitElement {
         @value-changed=${this._valueChanged}
       ></ha-form>
       <p class="hint">
-        Defaults: ${DEFAULTS.map_height} px tall, ${DEFAULT_HINT}. An option left blank follows the
-        default rather than being written into the dashboard.
+        Defaults: ${DEFAULTS.map_height} px tall, fitted ${DEFAULTS.zoom_offset} zoom level beyond the
+        watched area, ${DEFAULT_HINT}. An option left blank follows the default rather than being
+        written into the dashboard. A positive zoom-in crops the area, so set it to 0 to see all of it.
       </p>
     `;
   }

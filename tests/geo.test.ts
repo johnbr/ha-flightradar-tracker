@@ -14,6 +14,7 @@ import {
   boundsCenter,
   boundsCorners,
   haversineKm,
+  padForZoomOffset,
   parseBounds,
   routeProgress,
 } from "../src/geo.ts";
@@ -161,4 +162,60 @@ test("an unknown airport position is not the Atlantic", () => {
   assert.equal(airportPosition(34, null), null);
   assert.equal(airportPosition(Number.NaN, 1), null);
   assert.deepEqual(airportPosition(34.056, -117.600998), [34.056, -117.600998]);
+});
+
+/**
+ * The zoom-offset padding.
+ *
+ * These assert the PROPERTY the card relies on -- that an offset of n moves
+ * the fit by exactly n whole zoom levels -- rather than the formula, which
+ * would just restate the implementation.
+ */
+
+/** What Leaflet does: fit the span, then floor to a whole zoom level. */
+function fittedZoom(basePad: number, offset: number, boxSpan: number, viewportSpan: number): number {
+  const span = boxSpan * (1 + 2 * padForZoomOffset(basePad, offset));
+  return Math.floor(Math.log2(viewportSpan / span));
+}
+
+test("an offset of zero leaves the base padding untouched", () => {
+  assert.equal(padForZoomOffset(0.05, 0), 0.05);
+  assert.equal(padForZoomOffset(0.5, 0), 0.5);
+});
+
+test("each offset step is exactly one whole zoom level, at any viewport", () => {
+  // Deliberately awkward viewports, so this cannot pass by landing on a
+  // convenient power of two.
+  for (const viewport of [1000, 1237, 640, 1913.5]) {
+    const base = fittedZoom(0.05, 0, 3.7, viewport);
+    for (const offset of [-2, -1, 1, 2, 3]) {
+      assert.equal(
+        fittedZoom(0.05, offset, 3.7, viewport),
+        base + offset,
+        `offset ${offset} at viewport ${viewport}`
+      );
+    }
+  }
+});
+
+test("one step in halves the visible span", () => {
+  const span = (offset: number) => 1 + 2 * padForZoomOffset(0.05, offset);
+  assert.ok(Math.abs(span(1) - span(0) / 2) < 1e-12);
+  assert.ok(Math.abs(span(2) - span(0) / 4) < 1e-12);
+});
+
+test("padding never reaches the -0.5 that would invert the bounds", () => {
+  // -0.5 is the point where a padded box collapses through zero width. The
+  // curve approaches it asymptotically, so the guard is the config range, but
+  // the property should hold well past it.
+  for (let offset = 0; offset <= 12; offset += 1) {
+    assert.ok(padForZoomOffset(0.05, offset) > -0.5, `offset ${offset}`);
+  }
+});
+
+test("the default offset crops the watched area, and that is deliberate", () => {
+  // Documents the trade-off the default makes: at FIT_PAD 0.05 the fit shows
+  // about 55% of the box's width, so aircraft near the edge need a pan.
+  const visible = 1 + 2 * padForZoomOffset(0.05, 1);
+  assert.ok(visible > 0.5 && visible < 0.6, `visible fraction ${visible}`);
 });

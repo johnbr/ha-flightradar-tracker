@@ -133,7 +133,7 @@ test("parsing does not invent values; resolving fills them in", () => {
   assert.equal(parsed.show_tracks, undefined);
 
   const resolved = resolveConfig(parsed);
-  assert.equal(resolved.map_height, 380);
+  assert.equal(resolved.map_height, 460);
   assert.equal(resolved.icon_size, 28);
   assert.equal(resolved.show_tracks, true);
   assert.equal(resolved.show_area_center, true);
@@ -157,4 +157,28 @@ test("explicit values survive resolution", () => {
   assert.equal(resolved.show_tracks, false);
   assert.equal(resolved.zoom, 9);
   assert.equal(resolved.title, "Overhead");
+});
+
+test("zoom_offset defaults to one level in", () => {
+  assert.equal(resolveConfig(parseConfig({ entity: "sensor.x" })).zoom_offset, 1);
+});
+
+test("zoom_offset accepts whole levels in both directions", () => {
+  assert.equal(parseConfig({ entity: "sensor.x", zoom_offset: 0 }).zoom_offset, 0);
+  assert.equal(parseConfig({ entity: "sensor.x", zoom_offset: -2 }).zoom_offset, -2);
+  assert.equal(parseConfig({ entity: "sensor.x", zoom_offset: 3 }).zoom_offset, 3);
+});
+
+test("zoom_offset rejects a fractional level", () => {
+  // Leaflet snaps the fit to a whole zoom, so 0.5 would land on one level or
+  // the next depending on the viewport -- silently not what was asked for.
+  assert.throws(
+    () => parseConfig({ entity: "sensor.x", zoom_offset: 0.5 }),
+    /whole number of zoom levels/
+  );
+});
+
+test("zoom_offset rejects a level outside the range", () => {
+  assert.throws(() => parseConfig({ entity: "sensor.x", zoom_offset: 4 }), /between -2 and 3/);
+  assert.throws(() => parseConfig({ entity: "sensor.x", zoom_offset: -3 }), /between -2 and 3/);
 });
