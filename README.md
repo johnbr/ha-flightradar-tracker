@@ -49,7 +49,7 @@ Under construction, milestone by milestone.
 ### HACS (custom repository)
 
 1. HACS → ⋮ → **Custom repositories**
-2. Repository `https://github.com/johnbr/ha-flight-map-card`, category **Dashboard**
+2. Repository `https://github.com/johnbr/ha-flightradar-tracker`, category **Dashboard**
 3. Install, then reload the browser.
 
 ### Manual

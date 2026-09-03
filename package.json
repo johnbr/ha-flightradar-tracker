@@ -1,5 +1,5 @@
 {
-  "name": "ha-flight-map-card",
+  "name": "ha-flightradar-tracker",
   "version": "0.1.0",
   "description": "Home Assistant Lovelace card: an interactive map of the aircraft overhead, tap one for its full detail. Reads the Flightradar24 integration's area sensor.",
   "type": "module",
@@ -22,7 +22,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/johnbr/ha-flight-map-card.git"
+    "url": "https://github.com/johnbr/ha-flightradar-tracker.git"
   },
   "dependencies": {
     "lit": "^3.2.0"

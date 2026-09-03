@@ -25,7 +25,7 @@ import type { HassEntity, HomeAssistant } from "./types";
  */
 const VERSION = new URL(import.meta.url).searchParams.get("v") ?? "dev";
 
-const DOCS = "https://github.com/johnbr/ha-flight-map-card";
+const DOCS = "https://github.com/johnbr/ha-flightradar-tracker";
 
 interface CustomCard {
   type: string;
