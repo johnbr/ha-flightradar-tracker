@@ -27,6 +27,7 @@ const KNOWN_KEYS = new Set([
   "map_height",
   "zoom",
   "zoom_offset",
+  "theme_mode",
   "show_tracks",
   "show_area_center",
   "show_photo",
@@ -49,6 +50,14 @@ export interface Units {
 
 /** The house is imperial; the sensor is not. */
 export const DEFAULT_UNITS: Units = { altitude: "ft", speed: "mph", distance: "mi" };
+
+/**
+ * Basemap theme. Same vocabulary as Home Assistant's own Map card, and passed
+ * straight through to `ha-map`, which reads "dark" and "auto" and treats
+ * anything else as light. `auto` follows the dashboard theme.
+ */
+export const THEME_MODES = ["auto", "light", "dark"] as const;
+export type ThemeMode = (typeof THEME_MODES)[number];
 
 const UNIT_VALUES = {
   altitude: ["ft", "m"],
@@ -82,6 +91,13 @@ export const DEFAULTS = {
    * edge are off screen until the view is panned. Set 0 to see all of it.
    */
   zoom_offset: 1,
+  /**
+   * Follow the dashboard theme, like Home Assistant's own Map card. Pin it to
+   * "light" where a dark basemap swallows the tracks -- the aircraft markers
+   * and their trails are drawn in fixed colours and are not re-tinted for a
+   * dark map.
+   */
+  theme_mode: "auto",
   show_tracks: true,
   show_area_center: true,
   show_photo: true,
@@ -101,6 +117,8 @@ export interface ParsedConfig {
   zoom?: number;
   /** Zoom levels to tighten the area fit by. Ignored when `zoom` is set. */
   zoom_offset?: number;
+  /** Basemap theme: follow the dashboard, or pin it light or dark. */
+  theme_mode?: ThemeMode;
   show_tracks?: boolean;
   show_area_center?: boolean;
   show_photo?: boolean;
@@ -116,6 +134,7 @@ export interface ResolvedConfig {
   map_height: number;
   zoom?: number;
   zoom_offset: number;
+  theme_mode: ThemeMode;
   show_tracks: boolean;
   show_area_center: boolean;
   show_photo: boolean;
@@ -178,6 +197,14 @@ export function parseConfig(raw: unknown): ParsedConfig {
     parsed[key] = value;
   }
 
+  const themeMode = cfg.theme_mode;
+  if (themeMode !== undefined) {
+    if (typeof themeMode !== "string" || !(THEME_MODES as readonly string[]).includes(themeMode)) {
+      fail(`\`theme_mode\` must be one of ${THEME_MODES.join(", ")}, got ${JSON.stringify(themeMode)}`);
+    }
+    parsed.theme_mode = themeMode as ThemeMode;
+  }
+
   const units = cfg.units;
   if (units !== undefined) {
     if (!units || typeof units !== "object" || Array.isArray(units)) fail("`units` must be a mapping");
@@ -216,6 +243,7 @@ export function resolveConfig(parsed: ParsedConfig): ResolvedConfig {
     show_photo: parsed.show_photo ?? DEFAULTS.show_photo,
     icon_size: parsed.icon_size ?? DEFAULTS.icon_size,
     zoom_offset: parsed.zoom_offset ?? DEFAULTS.zoom_offset,
+    theme_mode: parsed.theme_mode ?? DEFAULTS.theme_mode,
     units: { ...DEFAULT_UNITS, ...parsed.units },
   };
   if (parsed.title !== undefined) resolved.title = parsed.title;

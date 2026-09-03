@@ -700,7 +700,7 @@ export class FlightMapCard extends LitElement {
     }
     return html`
       <div class="map-wrap" style=${frame}>
-        <ha-map .autoFit=${false} .themeMode=${"auto"}></ha-map>
+        <ha-map .autoFit=${false} .themeMode=${this._config?.theme_mode ?? DEFAULTS.theme_mode}></ha-map>
         <button class="recentre" title="Recentre on the watched area" @click=${this._onRecentre}>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d=${RECENTRE_PATH}></path></svg>
         </button>

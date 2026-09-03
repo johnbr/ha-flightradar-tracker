@@ -182,3 +182,27 @@ test("zoom_offset rejects a level outside the range", () => {
   assert.throws(() => parseConfig({ entity: "sensor.x", zoom_offset: 4 }), /between -2 and 3/);
   assert.throws(() => parseConfig({ entity: "sensor.x", zoom_offset: -3 }), /between -2 and 3/);
 });
+
+test("theme_mode defaults to following the dashboard", () => {
+  assert.equal(resolveConfig(parseConfig({ entity: "sensor.x" })).theme_mode, "auto");
+});
+
+test("theme_mode accepts each supported basemap theme", () => {
+  for (const mode of ["auto", "light", "dark"]) {
+    assert.equal(parseConfig({ entity: "sensor.x", theme_mode: mode }).theme_mode, mode);
+  }
+});
+
+test("theme_mode rejects anything ha-map would silently treat as light", () => {
+  // ha-map reads "dark" and "auto" and falls through to light for everything
+  // else, so a typo like "Light" or "system" would quietly pick a theme rather
+  // than fail. That silent fallback is what this check exists to prevent.
+  for (const bad of ["Light", "system", "", "LIGHT"]) {
+    assert.throws(
+      () => parseConfig({ entity: "sensor.x", theme_mode: bad }),
+      /must be one of auto, light, dark/,
+      `expected ${JSON.stringify(bad)} to be rejected`
+    );
+  }
+  assert.throws(() => parseConfig({ entity: "sensor.x", theme_mode: 1 }), /must be one of/);
+});

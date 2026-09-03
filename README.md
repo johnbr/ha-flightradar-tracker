@@ -87,6 +87,7 @@ title: Flights overhead
 | `map_height` | number | `460` | Map frame height in px (120–1200). Capped at 300 px under a 700 px viewport |
 | `zoom` | number | — | Fixes the zoom (1–20) instead of fitting the watched area. The map still centres on the area |
 | `zoom_offset` | number | `1` | Whole zoom levels to tighten the area fit by (−2–3). **A positive value crops the area** — see below. Ignored when `zoom` is set |
+| `theme_mode` | string | `auto` | Basemap theme: `auto` (follow the dashboard), `light`, `dark` |
 | `icon_size` | number | `28` | Aircraft icon box in px (12–72) |
 
 ### About `zoom_offset`
