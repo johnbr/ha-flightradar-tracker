@@ -88,7 +88,45 @@ title: Flights overhead
 | `zoom` | number | — | Fixes the zoom (1–20) instead of fitting the watched area. The map still centres on the area |
 | `zoom_offset` | number | `1` | Whole zoom levels to tighten the area fit by (−2–3). **A positive value crops the area** — see below. Ignored when `zoom` is set |
 | `theme_mode` | string | `auto` | Basemap theme: `auto` (follow the dashboard), `light`, `dark` |
+| `show_airports` | bool | `true` | Draw the airports the overhead traffic is flying between — see below |
 | `icon_size` | number | `28` | Aircraft icon box in px (12–72) |
+
+### About `show_airports`
+
+The airports come from the origin and destination fields on the aircraft that
+are overhead right now, so they cost no extra request — but **this is not an
+airport database**, and the difference shows: a field with nothing in the air
+near it does not appear. Around a busy GA area that is academic, because the
+local fields are named continuously by their own circuit traffic; a quiet strip
+can blink in and out.
+
+Only airports inside the watched area are drawn. Traffic overhead routinely
+comes from a thousand kilometres away, and plotting every referenced airport
+would scatter markers across the country.
+
+### Aircraft shapes
+
+Three silhouettes, all rotated to the direction of travel:
+
+- **Jet** — mdi:airplane's swept planform. Also the fallback for any type the
+  card does not recognise.
+- **Light aircraft** — drawn by hand with a straight, unswept, full-span wing.
+  Chosen from an explicit list of ICAO type designators (Cessna singles, the
+  Piper PA-28/32 family, Beech pistons, Cirrus, Diamond, Mooney and friends).
+  It is a list rather than a pattern on purpose: `^C1\d\d$` reads tidily and
+  quietly captures a C130 Hercules, and `^BE\d\d$` captures the BE40 Beechjet.
+- **Helicopter** — body, boom, tail rotor and the main rotor disc, seen from
+  above, because mdi:helicopter is a side elevation and rotating that to a
+  compass heading looks like a crash.
+
+`aircraft_category` cannot make this distinction — measured against live data it
+reads `"Airplane"` for a Cessna 152 and an A321 alike, and is only useful for
+pulling helicopters out.
+
+Markers point along the segment they are visibly travelling, not along the
+feed's reported `heading`. The two agree in cruise and diverge in a turn, where
+the reported heading has already swung to its new value while the segment being
+drawn is still the old one — which reads as an aircraft flying sideways.
 
 ### About `zoom_offset`
 

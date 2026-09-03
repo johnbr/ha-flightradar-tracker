@@ -10,6 +10,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  aircraftKind,
+  collectAirports,
   diffFlights,
   flightId,
   flightLabel,
@@ -258,4 +260,87 @@ test("the label prefers the callsign and always resolves to something", () => {
   assert.equal(flightLabel(flight()), "N462PD");
   assert.equal(flightLabel(flight({ callsign: null, flight_number: "UA123" })), "UA123");
   assert.equal(flightLabel(flight({ callsign: null, flight_number: null })), "417b86f0");
+});
+
+/**
+ * Aircraft kind.
+ *
+ * The type designators below are the ones actually overhead here -- a live
+ * sample of 21 aircraft was 8 Cessna 172s, 8 Pipers, a 152 and a Cardinal
+ * against three airliners -- so misfiling the light types would mislabel most
+ * of the map.
+ */
+test("light types are recognised from their ICAO designator", () => {
+  for (const code of ["C172", "C152", "C77R", "P28A", "SR22", "DA40", "BE36", "PA46"]) {
+    assert.equal(aircraftKind(flight({ aircraft_code: code })), "light", code);
+  }
+});
+
+test("airliners stay jets", () => {
+  for (const code of ["A20N", "A21N", "B738", "B739", "A319", "E175", "CRJ9"]) {
+    assert.equal(aircraftKind(flight({ aircraft_code: code })), "jet", code);
+  }
+});
+
+test("designators a pattern rule would have swept up stay jets", () => {
+  // The reason the list is explicit: /^C1\d\d$/ captures the C130 Hercules and
+  // /^BE\d\d$/ captures the BE40 Beechjet, neither of which is a light aircraft.
+  for (const code of ["C130", "BE40", "C17", "C5M"]) {
+    assert.equal(aircraftKind(flight({ aircraft_code: code })), "jet", code);
+  }
+});
+
+test("an unknown or missing designator falls back to the jet shape", () => {
+  // The shape the card drew for everything before light aircraft were split
+  // out, so a type missing from the list renders exactly as it used to.
+  assert.equal(aircraftKind(flight({ aircraft_code: "ZZZZ" })), "jet");
+  assert.equal(aircraftKind(flight({ aircraft_code: null })), "jet");
+  assert.equal(aircraftKind(flight({ aircraft_code: "" })), "jet");
+});
+
+test("designators are matched case- and whitespace-insensitively", () => {
+  assert.equal(aircraftKind(flight({ aircraft_code: " c172 " })), "light");
+});
+
+test("helicopter still wins over the type list", () => {
+  assert.equal(
+    aircraftKind(flight({ aircraft_code: "C172", aircraft_category: "Helicopter" })),
+    "helicopter"
+  );
+});
+
+/** Airports, using the real coordinates from the live sample. */
+const CNO = { airport_origin_code_iata: "CNO", airport_origin_name: "Chino Airport",
+              airport_origin_latitude: 33.9747, airport_origin_longitude: -117.6368 };
+const DEN = { airport_destination_code_iata: "DEN", airport_destination_name: "Denver",
+              airport_destination_latitude: 39.8617, airport_destination_longitude: -104.673 };
+const BOUNDS = { north: 34.0845, south: 33.8146, west: -117.7365, east: -117.4111 };
+
+test("airports are collected from both ends of a flight", () => {
+  const found = collectAirports([flight({ ...CNO, ...DEN })], null);
+  assert.deepEqual(found.map((a) => a.code), ["CNO", "DEN"]);
+});
+
+test("airports outside the watched area are dropped", () => {
+  // Denver is a real destination of traffic overhead; plotting it would put a
+  // marker a thousand kilometres away for an aircraft merely passing through.
+  const found = collectAirports([flight({ ...CNO, ...DEN })], BOUNDS);
+  assert.deepEqual(found.map((a) => a.code), ["CNO"]);
+});
+
+test("the same airport named by many flights is drawn once", () => {
+  const found = collectAirports([flight(CNO), flight(CNO), flight(CNO)], BOUNDS);
+  assert.equal(found.length, 1);
+  assert.equal(found[0]?.name, "Chino Airport");
+});
+
+test("an airport with no coordinates, or the feed's 0,0 unknown, is skipped", () => {
+  assert.deepEqual(collectAirports([flight({ airport_origin_code_iata: "XXX" })], null), []);
+  assert.deepEqual(
+    collectAirports(
+      [flight({ airport_origin_code_iata: "XXX", airport_origin_latitude: 0, airport_origin_longitude: 0 })],
+      null
+    ),
+    []
+  );
 });

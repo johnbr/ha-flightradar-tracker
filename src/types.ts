@@ -88,6 +88,13 @@ export interface Flight {
   altitude: number | null;
   /** Degrees true. */
   heading: number | null;
+  /**
+   * Derived, not from the payload: the direction the marker is actually
+   * travelling, computed by the card from the previous fix (see
+   * `travelHeading`). Set before diffing so both the marker key and the icon
+   * agree on which way the aircraft points.
+   */
+  heading_display?: number | null;
   /** Knots. */
   ground_speed: number | null;
   /** Feet per minute. */

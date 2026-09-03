@@ -29,6 +29,7 @@ const KNOWN_KEYS = new Set([
   "zoom_offset",
   "theme_mode",
   "show_tracks",
+  "show_airports",
   "show_area_center",
   "show_photo",
   "icon_size",
@@ -99,6 +100,12 @@ export const DEFAULTS = {
    */
   theme_mode: "auto",
   show_tracks: true,
+  /**
+   * On by default: the airports are what turn a ring of circuit traffic into
+   * "that is Chino". They come from the flights themselves, so they cost no
+   * extra request -- see collectAirports.
+   */
+  show_airports: true,
   show_area_center: true,
   show_photo: true,
   icon_size: 28,
@@ -120,6 +127,7 @@ export interface ParsedConfig {
   /** Basemap theme: follow the dashboard, or pin it light or dark. */
   theme_mode?: ThemeMode;
   show_tracks?: boolean;
+  show_airports?: boolean;
   show_area_center?: boolean;
   show_photo?: boolean;
   icon_size?: number;
@@ -136,6 +144,7 @@ export interface ResolvedConfig {
   zoom_offset: number;
   theme_mode: ThemeMode;
   show_tracks: boolean;
+  show_airports: boolean;
   show_area_center: boolean;
   show_photo: boolean;
   icon_size: number;
@@ -188,7 +197,7 @@ export function parseConfig(raw: unknown): ParsedConfig {
     parsed[key] = value as number;
   }
 
-  for (const key of ["show_tracks", "show_area_center", "show_photo"] as const) {
+  for (const key of ["show_tracks", "show_airports", "show_area_center", "show_photo"] as const) {
     const value = cfg[key];
     if (value === undefined) continue;
     // Not truthiness: `show_tracks: "false"` is a mistake, and treating that
@@ -239,6 +248,7 @@ export function resolveConfig(parsed: ParsedConfig): ResolvedConfig {
     entity: parsed.entity,
     map_height: parsed.map_height ?? DEFAULTS.map_height,
     show_tracks: parsed.show_tracks ?? DEFAULTS.show_tracks,
+    show_airports: parsed.show_airports ?? DEFAULTS.show_airports,
     show_area_center: parsed.show_area_center ?? DEFAULTS.show_area_center,
     show_photo: parsed.show_photo ?? DEFAULTS.show_photo,
     icon_size: parsed.icon_size ?? DEFAULTS.icon_size,

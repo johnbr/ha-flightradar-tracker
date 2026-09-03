@@ -17,8 +17,23 @@ import {
   resolveConfig,
   type ResolvedConfig,
 } from "./config";
-import { diffFlights, flightLabel, indexById, isHelicopter, isOnGround, parseFlights } from "./flights";
-import { boundsCenter, boundsCorners, padForZoomOffset, parseBounds, type AreaBounds } from "./geo";
+import {
+  aircraftKind,
+  collectAirports,
+  diffFlights,
+  flightLabel,
+  indexById,
+  isOnGround,
+  parseFlights,
+} from "./flights";
+import {
+  boundsCenter,
+  boundsCorners,
+  padForZoomOffset,
+  parseBounds,
+  travelHeading,
+  type AreaBounds,
+} from "./geo";
 import {
   ensureHaMap,
   whenMapReady,
@@ -31,7 +46,7 @@ import {
   type LeafletPolyline,
 } from "./ha-map";
 import { renderDetail, renderEmptyDetail } from "./detail";
-import { aircraftIcon, type AircraftIconStyle, type AircraftShape } from "./markers";
+import { aircraftIcon, airportIcon, type AircraftIconStyle, type AircraftShape } from "./markers";
 import { cardStyles } from "./styles";
 import type { Flight, HassEntity, HomeAssistant } from "./types";
 
@@ -75,9 +90,21 @@ const SELECTED_TRACK_OPACITY = 0.9;
  * aircraft arrives just as the next fix lands and the motion reads as
  * continuous. The clamp covers the first tick after a load (whose "gap" is
  * really time since mount) and a coordinator that has stalled.
+ *
+ * THE CEILING HAS TO CLEAR THE REAL TICK GAP, or the glide finishes early and
+ * every aircraft sits frozen for the remainder -- motion, then a dead pause,
+ * then motion again. That is not hypothetical: the ceiling was 30 s, and the
+ * integration's actual cycle is its scan_interval PLUS however long a refresh
+ * takes, which was measured here at 44-90 s because it fetches per-flight
+ * details serially. So the aircraft glided for 30 s and stopped for 30.
+ *
+ * 120 s clears the measured cycle with headroom for a busier area (the cost is
+ * linear in aircraft count). Past that the feed has genuinely stalled, and
+ * freezing is the honest thing to draw -- a two-minute crawl toward a fix that
+ * may never be superseded would be inventing motion.
  */
 const GLIDE_MIN_MS = 1000;
-const GLIDE_MAX_MS = 30_000;
+const GLIDE_MAX_MS = 120_000;
 
 /** mdi:crosshairs-gps */
 const RECENTRE_PATH =
@@ -88,12 +115,26 @@ const RECENTRE_PATH =
 /** markers.ts stays runtime-import-free, so the card adapts the flight for it. */
 function shapeOf(flight: Flight, selected: boolean): AircraftShape {
   return {
-    heading: flight.heading,
-    helicopter: isHelicopter(flight),
+    // The travelled bearing where there is one, so the aircraft points the way
+    // it is visibly moving; `heading_display` falls back to the reported
+    // heading itself, so this is never worse than the raw value.
+    heading: flight.heading_display ?? flight.heading,
+    kind: aircraftKind(flight),
     grounded: isOnGround(flight),
     selected,
   };
 }
+
+/**
+ * Minimum movement between two fixes before the segment is trusted to say
+ * which way an aircraft points.
+ *
+ * 150 m is far below anything real -- the slowest thing here, a Cessna in the
+ * circuit at 65 kt, covers ~2 km between ticks -- and far above position
+ * noise, so it only rejects aircraft that are parked or taxiing, where a
+ * bearing derived from jitter would spin the icon at random.
+ */
+const TRAVEL_MIN_KM = 0.15;
 
 interface CustomCard {
   type: string;
@@ -163,6 +204,9 @@ export class FlightMapCard extends LitElement {
   private _trackLayer?: LeafletLayerGroup;
   /** Aircraft markers, on top. */
   private _markerLayer?: LeafletLayerGroup;
+  private _airportLayer?: LeafletLayerGroup;
+  /** Which airports are drawn, so the layer is only rebuilt when the set moves. */
+  private _airportKey = "";
   private _centreMarker?: LeafletPathLayer;
   /** One marker per flight id -- the identity that survives a tick. */
   private _markers = new Map<string, LeafletMarker>();
@@ -266,6 +310,8 @@ export class FlightMapCard extends LitElement {
     this._baseLayer = undefined;
     this._trackLayer = undefined;
     this._markerLayer = undefined;
+    this._airportLayer = undefined;
+    this._airportKey = "";
     this._centreMarker = undefined;
     this._markers.clear();
     this._tracks.clear();
@@ -284,6 +330,8 @@ export class FlightMapCard extends LitElement {
     this._baseLayer?.clearLayers();
     this._trackLayer?.clearLayers();
     this._markerLayer?.clearLayers();
+    this._airportLayer?.clearLayers();
+    this._airportKey = "";
     this._centreMarker = undefined;
     this._markers.clear();
     this._tracks.clear();
@@ -379,6 +427,9 @@ export class FlightMapCard extends LitElement {
         // into their new pixel positions -- so the transitions come off first.
         map.on("zoomstart", () => this._endGlide());
         this._baseLayer = leaflet.layerGroup().addTo(map);
+        // Added before the tracks and the aircraft, so airports sit underneath
+        // both: they are the fixed reference, never the subject.
+        this._airportLayer = leaflet.layerGroup().addTo(map);
         this._trackLayer = leaflet.layerGroup().addTo(map);
         this._markerLayer = leaflet.layerGroup().addTo(map);
         this._centreMarker = undefined;
@@ -426,6 +477,22 @@ export class FlightMapCard extends LitElement {
     if (!markerLayer || !trackLayer) return;
 
     const flights = this._flights();
+    // Point each aircraft the way it is actually travelling, BEFORE diffing:
+    // markerKey reads `heading_display`, so computing it afterwards would leave
+    // the icon a tick behind the position it belongs to.
+    for (const flight of flights) {
+      const before = this._drawn.get(flight.id);
+      flight.heading_display = before
+        ? travelHeading(
+            [before.latitude, before.longitude],
+            [flight.latitude, flight.longitude],
+            flight.heading,
+            TRAVEL_MIN_KM
+          )
+        : flight.heading;
+    }
+    this._syncAirports(leaflet, flights);
+
     const diff = diffFlights(this._drawn, flights);
     if (!diff.added.length && !diff.changed.length && !diff.removed.length) return;
 
@@ -535,16 +602,80 @@ export class FlightMapCard extends LitElement {
     if (selected) line.bringToFront();
   }
 
+  /**
+   * Whether the BASEMAP is light, which is not always what the dashboard is.
+   *
+   * null means `theme_mode: auto`, where the map follows the dashboard and the
+   * theme variables are already the right answer.
+   */
+  private _mapIsLight(): boolean | null {
+    const mode = this._config?.theme_mode ?? DEFAULTS.theme_mode;
+    return mode === "auto" ? null : mode === "light";
+  }
+
   private _iconStyle(): AircraftIconStyle {
+    // The theme variables track the DASHBOARD. That was the right source while
+    // the map always followed it, but `theme_mode` can now pin the basemap
+    // against the dashboard -- and a dark dashboard resolves
+    // --primary-text-color to near-white, which on a pinned-light map is a
+    // white aircraft on white tiles, saved only by its halo. So when the map
+    // theme is pinned, the silhouette is pinned to match the MAP.
+    const light = this._mapIsLight();
     return {
       size: this._config?.icon_size ?? DEFAULTS.icon_size,
-      // The text colour tracks the theme, and ha-map switches its tiles with
-      // the same theme, so the silhouette stays legible in both.
-      color: this._themeColor("--primary-text-color", "#212121"),
-      outline: this._themeColor("--card-background-color", "#ffffff"),
+      color:
+        light === null ? this._themeColor("--primary-text-color", "#212121") : light ? "#212121" : "#f5f5f5",
+      outline:
+        light === null ? this._themeColor("--card-background-color", "#ffffff") : light ? "#ffffff" : "#1c1c1c",
       groundColor: this._themeColor("--disabled-text-color", "#8f8f8f"),
       selectedColor: this._themeColor("--primary-color", "#03a9f4"),
     };
+  }
+
+  /**
+   * Redraw the airport layer, but only when the SET of airports changes.
+   *
+   * Airports do not move, so there is nothing to glide and nothing to patch --
+   * the whole layer is cheap to rebuild and only does so when a field enters or
+   * leaves the flights' origin/destination set, which at a busy GA field is
+   * almost never.
+   */
+  private _syncAirports(leaflet: LeafletLike, flights: Flight[]): void {
+    const layer = this._airportLayer;
+    if (!layer) return;
+    if (!(this._config?.show_airports ?? DEFAULTS.show_airports)) {
+      if (this._airportKey !== "") {
+        layer.clearLayers();
+        this._airportKey = "";
+      }
+      return;
+    }
+
+    const airports = collectAirports(flights, this._bounds());
+    const key = airports.map((a) => a.code).join(",");
+    if (key === this._airportKey) return;
+    this._airportKey = key;
+
+    layer.clearLayers();
+    const light = this._mapIsLight();
+    const style = {
+      color: light === null ? this._themeColor("--secondary-text-color", "#5c5c5c") : light ? "#5c5c5c" : "#c9c9c9",
+      outline:
+        light === null ? this._themeColor("--card-background-color", "#ffffff") : light ? "#ffffff" : "#1c1c1c",
+      labelColor:
+        light === null ? this._themeColor("--secondary-text-color", "#5c5c5c") : light ? "#3c3c3c" : "#e0e0e0",
+    };
+    for (const airport of airports) {
+      leaflet
+        .marker([airport.latitude, airport.longitude], {
+          icon: airportIcon(leaflet, airport.code, style),
+          // Never steals a tap from an aircraft, and never takes the selection.
+          interactive: false,
+          keyboard: false,
+          title: airport.name ?? airport.code,
+        })
+        .addTo(layer);
+    }
   }
 
   /**

@@ -28,6 +28,7 @@ const LABELS: Record<string, string> = {
   theme_mode: "Map theme",
   icon_size: "Aircraft icon size",
   show_tracks: "Show tracks",
+  show_airports: "Show airports",
   show_area_center: "Mark the area centre",
   show_photo: "Show aircraft photo",
   unit_altitude: "Altitude",
@@ -113,6 +114,7 @@ const SCHEMA = [
     name: "",
     schema: [
       { name: "show_tracks", selector: { boolean: {} } },
+      { name: "show_airports", selector: { boolean: {} } },
       { name: "show_area_center", selector: { boolean: {} } },
       { name: "show_photo", selector: { boolean: {} } },
     ],

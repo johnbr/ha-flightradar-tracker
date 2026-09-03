@@ -14,9 +14,11 @@ import {
   boundsCenter,
   boundsCorners,
   haversineKm,
+  bearingDeg,
   padForZoomOffset,
   parseBounds,
   routeProgress,
+  travelHeading,
 } from "../src/geo.ts";
 
 /** Read live off sensor.flightradar24_current_in_area on 2026-09-03. */
@@ -218,4 +220,41 @@ test("the default offset crops the watched area, and that is deliberate", () => 
   // about 55% of the box's width, so aircraft near the edge need a pan.
   const visible = 1 + 2 * padForZoomOffset(0.05, 1);
   assert.ok(visible > 0.5 && visible < 0.6, `visible fraction ${visible}`);
+});
+
+/**
+ * Travel heading.
+ *
+ * The feed's `heading` is where the nose points; the marker glides in a
+ * straight line between two fixes. In a turn those disagree, and the aircraft
+ * reads as flying sideways -- which around a GA circuit is most of the fleet.
+ */
+test("bearing is measured clockwise from north", () => {
+  const at = (lat: number, lon: number): [number, number] => [lat, lon];
+  assert.equal(Math.round(bearingDeg(at(34, -117), at(35, -117))), 0);
+  assert.equal(Math.round(bearingDeg(at(34, -117), at(34, -116))), 90);
+  assert.equal(Math.round(bearingDeg(at(34, -117), at(33, -117))), 180);
+  assert.equal(Math.round(bearingDeg(at(34, -117), at(34, -118))), 270);
+});
+
+test("a real segment overrides a stale reported heading", () => {
+  // Reported heading says north; the aircraft demonstrably went east.
+  const heading = travelHeading([34, -117], [34, -116.9], 0, 0.15);
+  assert.equal(Math.round(heading ?? -1), 90);
+});
+
+test("movement below the floor keeps the reported heading", () => {
+  // ~11 m apart: parked or taxiing, where a bearing off position noise would
+  // spin the icon at random.
+  assert.equal(travelHeading([34, -117], [34.0001, -117], 275, 0.15), 275);
+});
+
+test("a null reported heading stays null when there is no segment to measure", () => {
+  assert.equal(travelHeading([34, -117], [34, -117], null, 0.15), null);
+});
+
+test("the floor is far below one tick of the slowest real traffic", () => {
+  // A Cessna in the circuit at 65 kt covers ~2 km between ticks, so the floor
+  // only ever rejects aircraft that are not really moving.
+  assert.ok(haversineKm([34, -117], [34.018, -117]) > 0.15 * 10);
 });

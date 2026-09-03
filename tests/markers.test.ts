@@ -33,7 +33,7 @@ const STYLE = { size: 28, color: "#111", outline: "#fff", groundColor: "#888", s
 
 const shape = (over: Partial<AircraftShape> = {}): AircraftShape => ({
   heading: 6,
-  helicopter: false,
+  kind: "jet",
   grounded: false,
   selected: false,
   ...over,
@@ -68,7 +68,7 @@ test("heading becomes a rotation", () => {
 
 test("a plane and a helicopter draw different shapes", () => {
   const plane = iconHtml();
-  const heli = iconHtml({ helicopter: true });
+  const heli = iconHtml({ kind: "helicopter" });
   assert.notEqual(plane, heli);
   // The helicopter is drawn from above -- body, boom, tail rotor and the main
   // rotor cross -- because mdi:helicopter is a side elevation and rotating that
@@ -107,4 +107,26 @@ test("theme colours cannot break out of the markup", () => {
   // whole icon rather than fail loudly.
   aircraftIcon(leaflet, shape(), { ...STYLE, color: '"><script>x</script>' });
   assert.doesNotMatch(captured.html ?? "", /<script>/);
+});
+
+test("a light aircraft and a jet draw different shapes", () => {
+  const jet = iconHtml({ kind: "jet" });
+  const light = iconHtml({ kind: "light" });
+  assert.notEqual(jet, light);
+  // The jet keeps mdi:airplane's swept planform; the light aircraft is drawn by
+  // hand with a STRAIGHT full-span wing, which is what carries the difference
+  // at a shared icon size.
+  assert.match(jet, /<path d="M21 16v-2/);
+  assert.doesNotMatch(light, /<path d="M21 16v-2/);
+  assert.match(light, /<rect[^>]*width="19\.2"/);
+});
+
+test("all three kinds are distinct from each other", () => {
+  const seen = new Set([iconHtml({ kind: "jet" }), iconHtml({ kind: "light" }), iconHtml({ kind: "helicopter" })]);
+  assert.equal(seen.size, 3);
+});
+
+test("a light aircraft still rotates and still dims on the ground", () => {
+  assert.match(iconHtml({ kind: "light", heading: 240 }), /rotate\(240deg\)/);
+  assert.match(iconHtml({ kind: "light", grounded: true }), /opacity:0\.55/);
 });

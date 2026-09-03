@@ -162,3 +162,40 @@ export function padForZoomOffset(basePad: number, offset: number): number {
   if (offset === 0) return basePad;
   return ((1 + 2 * basePad) * 2 ** -offset - 1) / 2;
 }
+
+/** Initial great-circle bearing from `from` to `to`, in degrees true (0-360). */
+export function bearingDeg(from: LatLon, to: LatLon): number {
+  const rad = Math.PI / 180;
+  const lat1 = from[0] * rad;
+  const lat2 = to[0] * rad;
+  const dLon = (to[1] - from[1]) * rad;
+  const y = Math.sin(dLon) * Math.cos(lat2);
+  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+  return ((Math.atan2(y, x) / rad) + 360) % 360;
+}
+
+/**
+ * Which way to point an aircraft: the way it is visibly travelling.
+ *
+ * The feed's `heading` is where the NOSE points, which is not the same as the
+ * direction of travel -- and the marker glides in a straight line between two
+ * fixes, so any difference reads as an aircraft flying sideways. The two agree
+ * in level cruise and diverge exactly where this is most visible: an aircraft
+ * in a turn, whose reported heading has already swung to its new value while
+ * the segment being drawn is still the old one. In circuit traffic around a
+ * GA field that is most of the fleet, most of the time.
+ *
+ * So the segment wins whenever there is a real segment to measure. Below
+ * `minKm` the aircraft is parked, taxiing, or the movement is indistinguishable
+ * from position noise, and a bearing computed from it would spin the icon
+ * randomly -- there the reported heading is the better answer.
+ */
+export function travelHeading(
+  from: LatLon,
+  to: LatLon,
+  fallback: number | null,
+  minKm: number
+): number | null {
+  if (haversineKm(from, to) < minKm) return fallback;
+  return bearingDeg(from, to);
+}
