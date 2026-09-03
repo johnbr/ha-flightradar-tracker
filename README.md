@@ -31,18 +31,25 @@ Three deliberate choices:
   throws. The card is deliberately not built on silent fallbacks, where a typo becomes the
   default and "it didn't error" tells you nothing.
 
-## Status
+## What it does
 
-Under construction, milestone by milestone.
-
-- [x] **M0** — repo, tooling, CI; the card registers and renders
-- [x] **M1** — `ha-map` mounts, fits to the area bounds, pan/zoom
-- [x] **M2** — aircraft markers: rotated, patched in place per tick
-- [x] **M3** — track polylines
-- [x] **M4** — selection and the detail panel
-- [x] **M5** — route block with airport-local times, progress bar
-- [x] **M6** — units, visual editor
-- [ ] **M7** — docs and first release
+- **A map you can actually use.** Pan, pinch and zoom freely; the card fits the watched area
+  once on load and never again, so a data tick can't snap the view back under you. A recentre
+  control is the way back.
+- **Aircraft that move rather than blink.** Markers are keyed on the flight id and patched in
+  place — added, moved, turned, removed — and each one *glides* to its new fix instead of
+  teleporting. Every position drawn is on the line between two real fixes; nothing is
+  extrapolated.
+- **Rotated, per-kind icons.** Aircraft point where they are going. Helicopters get their own
+  top-down symbol, and anything on the ground is dimmed.
+- **Tracks.** Each aircraft's recent trail, from the sensor's own `coordinates` array.
+- **Tap for the detail.** Below the map, never over it: callsign, type and registration,
+  airline, photo, the route with **each airport's own local times** (and the airline "+1" for
+  a red-eye), a great-circle progress bar with distance flown, distance to run and time
+  remaining, then altitude, vertical speed, track, ground speed, distance, closest approach,
+  squawk and the ICAO 24-bit address — each row disappearing when the payload has no value
+  for it.
+- **Imperial by default**, because the sensor is metric and the house is not. Configurable.
 
 ## Installation
 
@@ -58,6 +65,12 @@ Copy `dist/flight-map-card.js` to `<config>/www/community/flight-map-card/` and 
 Lovelace resource of type **JavaScript Module**, with a `?v=` query string you bump on every
 update — a cached module shows up as Home Assistant's generic "Configuration error", with
 nothing on screen naming the cache.
+
+**Pick one, not both.** A HACS install serves the card from `/hacsfiles/…` and a manual one
+from `/local/community/…`; two registered resources means two copies of the element racing to
+register the same tag name. If you are editing the source, the manual path is the one that
+lets you deploy a build without cutting a release — and note that HACS overwrites its own
+copy on every update, so a hand-edited file under a HACS-managed directory does not survive.
 
 ## Configuration
 
@@ -117,3 +130,35 @@ importing a Lit-decorated module fails to parse before any assertion runs.
 ## License
 
 MIT
+
+## Notes on the data
+
+Four of the integration's sensors carry the `flights` array and are all valid targets:
+`current_in_area`, `entered_area`, `exited_area` and `additional_tracked`. The `airport_*`
+sensors are **not** — their `flights` attribute is arrivals/departures rows and renders
+nonsense.
+
+The array is `_unrecorded_attributes` upstream, so it costs no recorder churn — and equally
+there is no history to draw from. Each aircraft's `coordinates` array is the only possible
+source of a track.
+
+`flights[]` is the coordinator's insertion order, not distance order, so `flights[0]` is
+whichever aircraft entered the box first. This card sorts nearest-first before doing anything
+that means "the first one".
+
+**Ground clutter is filtered on the integration side**, with `min_altitude`. Without it, any
+airfield inside the configured radius fills the map with parked and taxiing aircraft, and each
+one still costs a detail lookup.
+
+**Scan interval.** Each cycle is one feed request plus a detail lookup for every aircraft whose
+cached details are stale — and the integration treats any non-helicopter with no
+`flight_number` as always stale, so those refetch every single cycle. The endpoint is
+unofficial and rate-limited; a 429 comes back as an *empty* feed, and sustained empties make
+the integration renew its session, which is itself what trips 429. 20 seconds is comfortable.
+Going much below that buys very little, because the card already glides between fixes.
+
+## Acknowledgements
+
+The [Flightradar24 integration](https://github.com/AlexandrErohin/home-assistant-flightradar24)
+does all the hard work; this is only a view onto one of its attributes. Its bundled
+`flightradar24-card` was the reference for marker rotation and for keying markers by flight id.
