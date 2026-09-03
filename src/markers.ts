@@ -39,6 +39,7 @@ export interface AircraftShape {
   heading: number | null;
   helicopter: boolean;
   grounded: boolean;
+  selected: boolean;
 }
 
 export interface AircraftIconStyle {
@@ -50,6 +51,8 @@ export interface AircraftIconStyle {
   outline: string;
   /** Body fill for an aircraft on the ground. */
   groundColor: string;
+  /** Body fill and halo for the selected aircraft. */
+  selectedColor: string;
 }
 
 /** Belt and braces: these come from the theme, but they end up inside markup. */
@@ -98,8 +101,14 @@ function helicopterSvg(style: AircraftIconStyle, fill: string): string {
 export function aircraftIcon(leaflet: LeafletLike, shape: AircraftShape, style: AircraftIconStyle): LeafletDivIcon {
   const heading = shape.heading === null ? 0 : Math.round(shape.heading);
   const grounded = shape.grounded;
-  const fill = grounded ? style.groundColor : style.color;
-  const inner = shape.helicopter ? helicopterSvg(style, fill) : planeSvg(style, fill);
+  const fill = shape.selected ? style.selectedColor : grounded ? style.groundColor : style.color;
+  const body = shape.helicopter ? helicopterSvg(style, fill) : planeSvg(style, fill);
+  // The halo is a circle, so it survives the rotation unchanged -- and it is
+  // drawn first, i.e. behind the aircraft.
+  const halo = shape.selected
+    ? `<circle cx="12" cy="12" r="11" fill="${safe(style.selectedColor)}" opacity="0.25"></circle>`
+    : "";
+  const inner = halo + body;
   const anchor = style.size / 2;
 
   return leaflet.divIcon({

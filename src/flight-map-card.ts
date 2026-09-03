@@ -23,6 +23,8 @@ import {
   type LeafletPathLayer,
   type LeafletPolyline,
 } from "./ha-map";
+import { renderDetail, renderEmptyDetail } from "./detail";
+import { DEFAULT_UNITS } from "./format";
 import { aircraftIcon, type AircraftIconStyle, type AircraftShape } from "./markers";
 import { cardStyles } from "./styles";
 import type { Flight, HassEntity, HomeAssistant } from "./types";
@@ -63,6 +65,9 @@ const ICON_SIZE = 28;
  */
 const TRACK_WEIGHT = 2;
 const TRACK_OPACITY = 0.45;
+/** The selected aircraft's own trail, raised above the rest. */
+const SELECTED_TRACK_WEIGHT = 3;
+const SELECTED_TRACK_OPACITY = 0.9;
 
 /** mdi:crosshairs-gps */
 const RECENTRE_PATH =
@@ -71,8 +76,13 @@ const RECENTRE_PATH =
   "20.5 3.5,17.17 3.05,13M12,5A7,7 0 0,0 5,12A7,7 0 0,0 12,19A7,7 0 0,0 19,12A7,7 0 0,0 12,5Z";
 
 /** markers.ts stays runtime-import-free, so the card adapts the flight for it. */
-function shapeOf(flight: Flight): AircraftShape {
-  return { heading: flight.heading, helicopter: isHelicopter(flight), grounded: isOnGround(flight) };
+function shapeOf(flight: Flight, selected: boolean): AircraftShape {
+  return {
+    heading: flight.heading,
+    helicopter: isHelicopter(flight),
+    grounded: isOnGround(flight),
+    selected,
+  };
 }
 
 interface CustomCard {
@@ -121,6 +131,8 @@ export class FlightMapCard extends LitElement {
   @state() private _config?: ParsedConfig;
   /** null while the lazy `ha-map` chunk is still being fetched. */
   @state() private _mapAvailable: boolean | null = null;
+  /** The flight id whose detail is on screen, if any. */
+  @state() private _selectedId?: string;
 
   /** Deliberately NOT reactive: assigning it must not schedule a render. */
   private _hass?: HomeAssistant;
@@ -345,7 +357,6 @@ export class FlightMapCard extends LitElement {
     if (!diff.added.length && !diff.changed.length && !diff.removed.length) return;
 
     const style = this._iconStyle();
-    const trackColor = style.color;
 
     for (const id of diff.removed) {
       const marker = this._markers.get(id);
@@ -358,28 +369,34 @@ export class FlightMapCard extends LitElement {
         trackLayer.removeLayer(track);
         this._tracks.delete(id);
       }
+      // The selected aircraft left the area. Its detail is now history, and
+      // leaving it on screen would read as live.
+      if (this._selectedId === id) this._selectedId = undefined;
     }
 
     for (const flight of diff.added) {
+      const id = flight.id;
       const marker = leaflet.marker([flight.latitude, flight.longitude], {
-        icon: aircraftIcon(leaflet, shapeOf(flight), style),
-        // Native tooltip: enough to identify an aircraft before the detail
-        // panel exists, and it costs no DOM.
+        icon: aircraftIcon(leaflet, shapeOf(flight, id === this._selectedId), style),
+        // Native tooltip: the callsign without a tap, and it costs no DOM.
         title: flightLabel(flight),
         keyboard: false,
       });
+      // Only the id is closed over: the flight object is replaced every tick.
+      marker.on("click", () => this._select(id));
       marker.addTo(markerLayer);
-      this._markers.set(flight.id, marker);
-      this._drawTrack(leaflet, flight, trackColor);
+      this._markers.set(id, marker);
+      this._drawTrack(leaflet, flight, style);
     }
 
     for (const { flight, moved, restyled, retracked } of diff.changed) {
       const marker = this._markers.get(flight.id);
       if (marker) {
         if (moved) marker.setLatLng([flight.latitude, flight.longitude]);
-        if (restyled) marker.setIcon(aircraftIcon(leaflet, shapeOf(flight), style));
+        if (restyled)
+          marker.setIcon(aircraftIcon(leaflet, shapeOf(flight, flight.id === this._selectedId), style));
       }
-      if (retracked) this._drawTrack(leaflet, flight, trackColor);
+      if (retracked) this._drawTrack(leaflet, flight, style);
     }
 
     this._drawn = indexById(flights);
@@ -395,7 +412,7 @@ export class FlightMapCard extends LitElement {
    * SVG path in place, where removing and re-adding would make the whole field
    * of trails flicker once a minute.
    */
-  private _drawTrack(leaflet: LeafletLike, flight: Flight, color: string): void {
+  private _drawTrack(leaflet: LeafletLike, flight: Flight, style: AircraftIconStyle): void {
     const layer = this._trackLayer;
     if (!layer) return;
     const points = flight.coordinates;
@@ -415,10 +432,13 @@ export class FlightMapCard extends LitElement {
       return;
     }
 
+    const selected = flight.id === this._selectedId;
     const line = leaflet.polyline(points, {
-      color,
-      weight: TRACK_WEIGHT,
-      opacity: TRACK_OPACITY,
+      // A track created while its aircraft is already selected has to be born
+      // selected: _paintSelection only runs when the selection itself changes.
+      ...(selected
+        ? this._selectedTrackStyle(style)
+        : { color: style.color, weight: TRACK_WEIGHT, opacity: TRACK_OPACITY }),
       lineJoin: "round",
       lineCap: "round",
       // The trail is context, not a control: a non-interactive line cannot
@@ -427,6 +447,7 @@ export class FlightMapCard extends LitElement {
     });
     line.addTo(layer);
     this._tracks.set(flight.id, line);
+    if (selected) line.bringToFront();
   }
 
   private _iconStyle(): AircraftIconStyle {
@@ -437,6 +458,57 @@ export class FlightMapCard extends LitElement {
       color: this._themeColor("--primary-text-color", "#212121"),
       outline: this._themeColor("--card-background-color", "#ffffff"),
       groundColor: this._themeColor("--disabled-text-color", "#8f8f8f"),
+      selectedColor: this._themeColor("--primary-color", "#03a9f4"),
+    };
+  }
+
+  /**
+   * Select an aircraft: repaint the two markers involved, raise its trail, and
+   * ease the map to it.
+   *
+   * `panTo` and not a fit: the zoom the reader chose is theirs, and changing it
+   * under a tap is the same offence as re-fitting on a data tick.
+   */
+  private _select(id: string): void {
+    if (this._selectedId === id) return;
+    const previous = this._selectedId;
+    this._selectedId = id;
+    this._paintSelection(previous);
+
+    const flight = this._drawn.get(id);
+    if (flight) this._mapInstance?.panTo([flight.latitude, flight.longitude], { animate: true });
+  }
+
+  /** Move the selected look from one aircraft to another. */
+  private _paintSelection(previous?: string): void {
+    const leaflet = this._mapEl()?.Leaflet;
+    if (!leaflet) return;
+    const style = this._iconStyle();
+
+    if (previous && previous !== this._selectedId) {
+      const flight = this._drawn.get(previous);
+      const marker = this._markers.get(previous);
+      if (flight && marker) marker.setIcon(aircraftIcon(leaflet, shapeOf(flight, false), style));
+      this._tracks.get(previous)?.setStyle({
+        color: style.color,
+        weight: TRACK_WEIGHT,
+        opacity: TRACK_OPACITY,
+      });
+    }
+
+    const id = this._selectedId;
+    if (!id) return;
+    const flight = this._drawn.get(id);
+    const marker = this._markers.get(id);
+    if (flight && marker) marker.setIcon(aircraftIcon(leaflet, shapeOf(flight, true), style));
+    this._tracks.get(id)?.setStyle(this._selectedTrackStyle(style)).bringToFront();
+  }
+
+  private _selectedTrackStyle(style: AircraftIconStyle): Record<string, unknown> {
+    return {
+      color: style.selectedColor,
+      weight: SELECTED_TRACK_WEIGHT,
+      opacity: SELECTED_TRACK_OPACITY,
     };
   }
 
@@ -509,6 +581,14 @@ export class FlightMapCard extends LitElement {
     `;
   }
 
+  private _renderDetail(): TemplateResult {
+    const id = this._selectedId;
+    const flight = id ? this._flights().find((f) => f.id === id) : undefined;
+    // Reading the flight out of the CURRENT tick, not out of `_drawn`: the
+    // panel must show live telemetry, not whatever it said when it was tapped.
+    return flight ? renderDetail(flight, DEFAULT_UNITS) : renderEmptyDetail();
+  }
+
   render(): TemplateResult | typeof nothing {
     const config = this._config;
     if (!config) return nothing;
@@ -525,7 +605,7 @@ export class FlightMapCard extends LitElement {
           ${st ? html`<div class="count">${count} aircraft</div>` : nothing}
         </div>
         ${st
-          ? this._renderMap()
+          ? html`${this._renderMap()}${this._renderDetail()}`
           : html`<div class="body error">Entity <code>${config.entity}</code> not found.</div>`}
       </ha-card>
     `;

@@ -29,12 +29,13 @@ const leaflet = {
   },
 } as unknown as LeafletLike;
 
-const STYLE = { size: 28, color: "#111", outline: "#fff", groundColor: "#888" };
+const STYLE = { size: 28, color: "#111", outline: "#fff", groundColor: "#888", selectedColor: "#0af" };
 
 const shape = (over: Partial<AircraftShape> = {}): AircraftShape => ({
   heading: 6,
   helicopter: false,
   grounded: false,
+  selected: false,
   ...over,
 });
 
@@ -82,6 +83,17 @@ test("an aircraft on the ground is dimmed and takes the ground colour", () => {
   assert.match(grounded, /opacity:0\.55/);
   assert.match(grounded, /#888/);
   assert.doesNotMatch(iconHtml({ grounded: false }), /opacity:0\.55/);
+});
+
+test("the selected aircraft takes the accent colour and a halo behind it", () => {
+  const selected = iconHtml({ selected: true });
+  assert.match(selected, /#0af/);
+  // A circle, so the halo survives the rotation unchanged.
+  assert.match(selected, /<circle[^>]*r="11"/);
+  assert.doesNotMatch(iconHtml(), /<circle/);
+  // Selection wins over the grounded colour: a selected aircraft on the ground
+  // must still read as the selected one.
+  assert.match(iconHtml({ selected: true, grounded: true }), /#0af/);
 });
 
 test("the silhouette carries an outline so it reads over any tile", () => {

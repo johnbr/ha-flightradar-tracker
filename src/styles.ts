@@ -94,6 +94,104 @@ export const cardStyles = css`
     padding: 0 16px;
   }
 
+  /*
+   * The detail panel. Below the map, never over it: selecting an aircraft must
+   * not obscure the thing you selected it from, and must not resize the map.
+   */
+  .detail {
+    padding: 12px 16px 16px;
+    border-top: 1px solid var(--divider-color, rgba(127, 127, 127, 0.2));
+  }
+
+  /* Fixed height, so the card does not collapse when nothing is selected. */
+  .detail.empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 56px;
+    color: var(--secondary-text-color);
+    font-size: 0.9rem;
+  }
+
+  .d-head {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .d-name {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--primary-text-color);
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .chip {
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 0.72rem;
+    letter-spacing: 0.03em;
+    color: var(--secondary-text-color);
+    background: var(--secondary-background-color, rgba(127, 127, 127, 0.14));
+  }
+
+  .d-sub {
+    margin-top: 2px;
+    font-size: 0.9rem;
+    color: var(--secondary-text-color);
+  }
+
+  .photo {
+    margin: 10px 0 0;
+  }
+
+  .photo img {
+    display: block;
+    width: 100%;
+    max-height: 220px;
+    object-fit: cover;
+    border-radius: var(--ha-card-border-radius, 12px);
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+    gap: 10px 12px;
+    margin-top: 12px;
+  }
+
+  .cell .k {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--secondary-text-color);
+  }
+
+  .cell .v {
+    font-size: 1rem;
+    color: var(--primary-text-color);
+    /* Figures that change every minute should not shuffle their neighbours. */
+    font-variant-numeric: tabular-nums;
+  }
+
+  .fr24 {
+    display: inline-block;
+    margin-top: 12px;
+    font-size: 0.85rem;
+    color: var(--primary-color);
+    text-decoration: none;
+  }
+
+  .fr24:hover {
+    text-decoration: underline;
+  }
+
   .body {
     padding: 8px 16px 16px;
     color: var(--secondary-text-color);
