@@ -138,3 +138,122 @@ export function fr24Url(id: string | null, slug: string | null): string | null {
   if (flightId) return `https://www.flightradar24.com/${encodeURIComponent(flightId)}`;
   return null;
 }
+
+/**
+ * An epoch that means something.
+ *
+ * The payload uses `0` for "no such time" as well as null -- `time_scheduled_
+ * departure` is 0 on every police and GA flight measured -- and 0 is a real
+ * instant in 1970, so it has to be rejected explicitly or the panel prints
+ * "Departs 4:00 PM" for an aircraft that has no schedule at all.
+ */
+export function epochOrNull(value: number | null | undefined): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
+  return value;
+}
+
+/**
+ * Shift an epoch into an airport's own local time.
+ *
+ * The offsets are fixed seconds from the payload (`-14400` for EDT, `-25200`
+ * for PDT), so the shift-then-read-UTC trick is exact and needs no timezone
+ * database -- and, crucially, gives the same answer whatever zone the browser
+ * or the test runner is in.
+ */
+function shifted(epoch: number, offsetSeconds: number): Date {
+  return new Date((epoch + offsetSeconds) * 1000);
+}
+
+/** "2026-09-02" in the airport's local time, for comparing calendar days. */
+export function localDateKey(epoch: number, offsetSeconds: number): string {
+  const d = shifted(epoch, offsetSeconds);
+  const month = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${month}-${day}`;
+}
+
+/** A clock time in the airport's own zone: "8:10 PM EDT". */
+export function formatAirportTime(
+  epoch: number | null | undefined,
+  offsetSeconds: number | null | undefined,
+  abbr: string | null | undefined,
+  hour12: boolean
+): string | null {
+  const at = epochOrNull(epoch);
+  if (at === null) return null;
+  // No offset means the time cannot be placed in the airport's own zone. UTC
+  // would be worse than nothing: it reads as a local time and is hours wrong.
+  if (typeof offsetSeconds !== "number" || !Number.isFinite(offsetSeconds)) return null;
+
+  const d = shifted(at, offsetSeconds);
+  const hours = d.getUTCHours();
+  const minutes = String(d.getUTCMinutes()).padStart(2, "0");
+  const clock = hour12
+    ? `${((hours + 11) % 12) + 1}:${minutes} ${hours < 12 ? "AM" : "PM"}`
+    : `${String(hours).padStart(2, "0")}:${minutes}`;
+  const zone = typeof abbr === "string" && abbr.trim() !== "" ? ` ${abbr.trim()}` : "";
+  return `${clock}${zone}`;
+}
+
+/**
+ * Calendar days between departure and arrival, each in its OWN local zone --
+ * the airline "+1", which is what a reader needs to know a red-eye lands
+ * tomorrow. Westbound flights can legitimately produce a negative.
+ */
+export function dayOffset(
+  departure: number | null | undefined,
+  departureOffset: number | null | undefined,
+  arrival: number | null | undefined,
+  arrivalOffset: number | null | undefined
+): number {
+  const dep = epochOrNull(departure);
+  const arr = epochOrNull(arrival);
+  if (dep === null || arr === null) return 0;
+  if (typeof departureOffset !== "number" || typeof arrivalOffset !== "number") return 0;
+  const a = Date.parse(`${localDateKey(dep, departureOffset)}T00:00:00Z`);
+  const b = Date.parse(`${localDateKey(arr, arrivalOffset)}T00:00:00Z`);
+  return Math.round((b - a) / 86_400_000);
+}
+
+/** "1h 12m", "47m". */
+export function formatDuration(minutes: number | null | undefined): string | null {
+  if (typeof minutes !== "number" || !Number.isFinite(minutes) || minutes < 0) return null;
+  const total = Math.round(minutes);
+  if (total < 1) return "< 1m";
+  const hours = Math.floor(total / 60);
+  const rest = total % 60;
+  return hours ? `${hours}h ${String(rest).padStart(2, "0")}m` : `${rest}m`;
+}
+
+const KM_TO_NM_ETA = 0.539957;
+
+/**
+ * Minutes until arrival.
+ *
+ * The reported estimate wins: it is the airline's, and it knows about the
+ * approach, the taxi and the hold. Distance over ground speed is the fallback
+ * for flights that carry no estimate, and it always reads optimistic -- it
+ * flies the aircraft straight to the threshold at cruise.
+ *
+ * An estimate already in the past is not used: a late aircraft would otherwise
+ * report a negative countdown, or "0m" for the rest of the flight.
+ */
+export function etaMinutes(
+  arrivalEpoch: number | null | undefined,
+  remainingKm: number | null | undefined,
+  groundSpeedKnots: number | null | undefined,
+  nowEpoch: number
+): number | null {
+  const arrival = epochOrNull(arrivalEpoch);
+  if (arrival !== null && arrival > nowEpoch) return (arrival - nowEpoch) / 60;
+  if (
+    typeof remainingKm === "number" &&
+    Number.isFinite(remainingKm) &&
+    typeof groundSpeedKnots === "number" &&
+    Number.isFinite(groundSpeedKnots) &&
+    groundSpeedKnots > 0
+  ) {
+    return ((remainingKm * KM_TO_NM_ETA) / groundSpeedKnots) * 60;
+  }
+  return null;
+}

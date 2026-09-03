@@ -662,7 +662,26 @@ export class FlightMapCard extends LitElement {
     const flight = id ? this._flights().find((f) => f.id === id) : undefined;
     // Reading the flight out of the CURRENT tick, not out of `_drawn`: the
     // panel must show live telemetry, not whatever it said when it was tapped.
-    return flight ? renderDetail(flight, DEFAULT_UNITS) : renderEmptyDetail();
+    return flight ? renderDetail(flight, DEFAULT_UNITS, this._hour12()) : renderEmptyDetail();
+  }
+
+  /**
+   * Whether to print clock times as 12-hour.
+   *
+   * Follows the viewer's Home Assistant setting where they have made one.
+   * `language` and `system` are left to the browser, which is what those two
+   * settings mean; anything unreadable falls back to 12-hour, this being a US
+   * install and the rest of these dashboards being 12-hour.
+   */
+  private _hour12(): boolean {
+    const preference = this._hass?.locale?.time_format;
+    if (preference === "24") return false;
+    if (preference === "12") return true;
+    try {
+      return Intl.DateTimeFormat(undefined, { hour: "numeric" }).resolvedOptions().hour12 ?? true;
+    } catch {
+      return true;
+    }
   }
 
   render(): TemplateResult | typeof nothing {

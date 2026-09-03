@@ -17,7 +17,7 @@ export interface HassEntity {
 
 export interface HomeAssistant {
   states: Record<string, HassEntity>;
-  locale?: { language?: string };
+  locale?: { language?: string; time_format?: "12" | "24" | "language" | "system" };
   config?: { time_zone?: string };
   themes?: unknown;
 }

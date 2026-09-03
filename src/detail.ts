@@ -13,8 +13,13 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import {
+  dayOffset,
+  epochOrNull,
+  etaMinutes,
+  formatAirportTime,
   formatAltitude,
   formatDistance,
+  formatDuration,
   formatHeading,
   formatSpeed,
   formatSquawk,
@@ -22,6 +27,7 @@ import {
   fr24Url,
   type Units,
 } from "./format";
+import { airportPosition, routeProgress } from "./geo";
 import type { Flight } from "./types";
 
 /** A photo that 404s must leave nothing behind, not a broken-image box. */
@@ -53,11 +59,148 @@ function photoUrl(flight: Flight): string | null {
   return flight.aircraft_photo_medium ?? flight.aircraft_photo_large ?? flight.aircraft_photo_small;
 }
 
+/**
+ * One end of the route: which time to show, and what to call it.
+ *
+ * Actual beats estimated beats scheduled -- and the scheduled time is kept as a
+ * second line whenever it differs, because "lands at 22:43, was meant to land
+ * at 22:37" is the interesting part. The zone is printed once, on the primary:
+ * both times are at the same airport, so repeating it is noise.
+ */
+interface Endpoint {
+  code: string;
+  city: string | null;
+  label: string;
+  time: string | null;
+  scheduled: string | null;
+  epoch: number | null;
+  offset: number | null;
+}
+
+function endpoint(flight: Flight, arrival: boolean, hour12: boolean): Endpoint | null {
+  const code = arrival ? flight.airport_destination_code_iata : flight.airport_origin_code_iata;
+  if (!code) return null;
+
+  const offset = arrival ? flight.airport_destination_timezone_offset : flight.airport_origin_timezone_offset;
+  const abbr = arrival ? flight.airport_destination_timezone_abbr : flight.airport_origin_timezone_abbr;
+  const real = epochOrNull(arrival ? flight.time_real_arrival : flight.time_real_departure);
+  const estimated = epochOrNull(arrival ? flight.time_estimated_arrival : flight.time_estimated_departure);
+  const planned = epochOrNull(arrival ? flight.time_scheduled_arrival : flight.time_scheduled_departure);
+
+  const chosen = real ?? estimated ?? planned;
+  const label = real
+    ? arrival
+      ? "Arrived"
+      : "Departed"
+    : estimated
+      ? arrival
+        ? "Arrives (est)"
+        : "Departs (est)"
+      : arrival
+        ? "Arrives"
+        : "Departs";
+
+  return {
+    code,
+    city: arrival ? flight.airport_destination_city : flight.airport_origin_city,
+    label,
+    time: formatAirportTime(chosen, offset, abbr, hour12),
+    // Only worth a line when it is not the time already shown above it.
+    scheduled:
+      planned !== null && chosen !== null && planned !== chosen
+        ? formatAirportTime(planned, offset, null, hour12)
+        : null,
+    epoch: chosen,
+    offset: typeof offset === "number" ? offset : null,
+  };
+}
+
+function renderEndpoint(end: Endpoint, dayMark: string, right: boolean): TemplateResult {
+  return html`
+    <div class="port ${right ? "right" : ""}">
+      <div class="iata">${end.code}</div>
+      ${end.city ? html`<div class="city">${end.city}</div>` : nothing}
+      ${end.time
+        ? html`<div class="t-label">${end.label}</div>
+            <div class="t-value">${end.time}${dayMark ? html`<sup class="day">${dayMark}</sup>` : nothing}</div>`
+        : nothing}
+      ${end.scheduled ? html`<div class="t-sched">sched ${end.scheduled}</div>` : nothing}
+    </div>
+  `;
+}
+
+/**
+ * Route and progress.
+ *
+ * Both disappear whole when the payload has no destination -- which is most of
+ * general aviation, and was the live sample the day this was written. A route
+ * block reading "SBD → null" with a 0 % bar is worse than no block.
+ */
+function renderRoute(flight: Flight, units: Units, hour12: boolean): TemplateResult | typeof nothing {
+  const from = endpoint(flight, false, hour12);
+  const to = endpoint(flight, true, hour12);
+  if (!from || !to) return nothing;
+
+  const days = dayOffset(from.epoch, from.offset, to.epoch, to.offset);
+  const dayMark = days > 0 ? `+${days}` : days < 0 ? `${days}` : "";
+
+  const progress = routeProgress(
+    airportPosition(flight.airport_origin_latitude, flight.airport_origin_longitude),
+    [flight.latitude, flight.longitude],
+    airportPosition(flight.airport_destination_latitude, flight.airport_destination_longitude)
+  );
+
+  const eta = progress
+    ? formatDuration(
+        etaMinutes(
+          flight.time_estimated_arrival ?? flight.time_scheduled_arrival,
+          progress.remainingKm,
+          flight.ground_speed,
+          Math.floor(Date.now() / 1000)
+        )
+      )
+    : null;
+
+  // Floored, not rounded: 99.8 % rounds to a bar reading "100 % · 2.1 mi to
+  // run", which contradicts itself. Only an aircraft actually at the airport
+  // gets to say 100.
+  const percent = progress ? Math.floor(progress.fraction * 100) : 0;
+
+  return html`
+    <div class="route">
+      <div class="leg">
+        ${renderEndpoint(from, "", false)}
+        <div class="arrow" aria-hidden="true">→</div>
+        ${renderEndpoint(to, dayMark, true)}
+      </div>
+      ${progress
+        ? html`
+            <div
+              class="bar"
+              role="progressbar"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow=${percent}
+            >
+              <div class="fill" style="width:${percent}%"></div>
+            </div>
+            <div class="legend">
+              <span>${formatDistance(progress.flownKm, units.distance)} flown</span>
+              <span>
+                ${formatDistance(progress.remainingKm, units.distance)} to run${eta ? ` · ${eta}` : ""}
+              </span>
+            </div>
+          `
+        : nothing}
+    </div>
+  `;
+}
+
 export function renderEmptyDetail(): TemplateResult {
   return html`<div class="detail empty">Tap an aircraft on the map</div>`;
 }
 
-export function renderDetail(flight: Flight, units: Units): TemplateResult {
+export function renderDetail(flight: Flight, units: Units, hour12: boolean): TemplateResult {
   const photo = photoUrl(flight);
   const link = fr24Url(flight.id, flightTitle(flight));
   const sub = subtitle(flight);
@@ -79,6 +222,7 @@ export function renderDetail(flight: Flight, units: Units): TemplateResult {
             </figure>`
           )
         : nothing}
+      ${renderRoute(flight, units, hour12)}
       <div class="grid">
         ${cell("Altitude", formatAltitude(flight.altitude, units.altitude))}
         ${cell("Vertical", formatVerticalSpeed(flight.vertical_speed))}

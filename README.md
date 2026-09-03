@@ -40,7 +40,7 @@ Under construction, milestone by milestone.
 - [x] **M2** — aircraft markers: rotated, patched in place per tick
 - [x] **M3** — track polylines
 - [x] **M4** — selection and the detail panel
-- [ ] **M5** — route block with airport-local times, progress bar
+- [x] **M5** — route block with airport-local times, progress bar
 - [ ] **M6** — units, visual editor
 - [ ] **M7** — docs and first release
 

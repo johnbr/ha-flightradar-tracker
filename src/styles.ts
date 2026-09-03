@@ -159,6 +159,98 @@ export const cardStyles = css`
     border-radius: var(--ha-card-border-radius, 12px);
   }
 
+  /* Route: two airports, the bar between them, and what is left to fly. */
+  .route {
+    margin-top: 12px;
+  }
+
+  .leg {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: start;
+    gap: 8px;
+  }
+
+  .port.right {
+    text-align: right;
+  }
+
+  .iata {
+    font-size: 1.15rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--primary-text-color);
+  }
+
+  .city {
+    font-size: 0.8rem;
+    color: var(--secondary-text-color);
+  }
+
+  .arrow {
+    align-self: center;
+    color: var(--secondary-text-color);
+  }
+
+  .t-label {
+    margin-top: 6px;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--secondary-text-color);
+  }
+
+  .t-value {
+    font-size: 0.95rem;
+    color: var(--primary-text-color);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* The airline "+1": small, raised, and never mistaken for part of the time. */
+  .day {
+    margin-left: 2px;
+    font-size: 0.65em;
+    color: var(--primary-color);
+  }
+
+  .t-sched {
+    font-size: 0.75rem;
+    color: var(--secondary-text-color);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .bar {
+    position: relative;
+    height: 6px;
+    margin: 12px 0 6px;
+    border-radius: 3px;
+    overflow: hidden;
+    background: var(--divider-color, rgba(127, 127, 127, 0.25));
+  }
+
+  .fill {
+    height: 100%;
+    border-radius: 3px;
+    background: var(--primary-color);
+    /* The fraction moves once a tick; let it slide rather than snap. */
+    transition: width 1s linear;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .fill {
+      transition: none;
+    }
+  }
+
+  .legend {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 0.78rem;
+    color: var(--secondary-text-color);
+    font-variant-numeric: tabular-nums;
+  }
+
   .grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));

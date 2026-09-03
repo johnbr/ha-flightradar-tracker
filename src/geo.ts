@@ -1,8 +1,5 @@
 /**
  * Geometry. Import-free so `node --test` can type-strip and run it.
- *
- * Milestone 1 needs only the watched area; distances, bearings and great-circle
- * progress arrive with the detail panel.
  */
 
 export type LatLon = [number, number];
@@ -63,4 +60,70 @@ export function boundsCorners(bounds: AreaBounds): [LatLon, LatLon] {
  */
 export function boundsCenter(bounds: AreaBounds): LatLon {
   return [(bounds.north + bounds.south) / 2, (bounds.west + bounds.east) / 2];
+}
+
+/** Mean Earth radius, km. */
+const EARTH_KM = 6371.0088;
+
+const RAD = Math.PI / 180;
+
+/**
+ * Great-circle distance in kilometres.
+ *
+ * Haversine rather than the spherical law of cosines: the two agree to metres
+ * over a continent, but cosines loses its precision on short hops, and the
+ * short hop is exactly the case that matters here -- an aircraft three
+ * kilometres from the runway.
+ */
+export function haversineKm(from: LatLon, to: LatLon): number {
+  const [lat1, lon1] = from;
+  const [lat2, lon2] = to;
+  const dLat = (lat2 - lat1) * RAD;
+  const dLon = (lon2 - lon1) * RAD;
+  const a =
+    Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * RAD) * Math.cos(lat2 * RAD) * Math.sin(dLon / 2) ** 2;
+  return 2 * EARTH_KM * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+export interface RouteProgress {
+  flownKm: number;
+  remainingKm: number;
+  /** 0 to 1. */
+  fraction: number;
+}
+
+/**
+ * How much of the journey is behind the aircraft.
+ *
+ * Deliberately `flown / (flown + remaining)` rather than
+ * `flown / origin-to-destination`. The direct-distance form is the obvious one
+ * and it misbehaves on any flight that is not on the straight line: a dogleg
+ * around weather, a hold, or an overflown destination all read past 100 %, and
+ * a bar cannot show 112 %. Measuring both legs from where the aircraft actually
+ * is keeps the fraction inside [0, 1] by construction, and makes the two
+ * numbers beside the bar -- flown, and left to run -- both true.
+ *
+ * Null when either airport has no position, which is most of general aviation.
+ */
+export function routeProgress(
+  origin: LatLon | null,
+  current: LatLon,
+  destination: LatLon | null
+): RouteProgress | null {
+  if (!origin || !destination) return null;
+  const flownKm = haversineKm(origin, current);
+  const remainingKm = haversineKm(current, destination);
+  const total = flownKm + remainingKm;
+  // An aircraft sitting on top of both airports is not a journey.
+  if (total <= 0) return null;
+  return { flownKm, remainingKm, fraction: Math.min(1, Math.max(0, flownKm / total)) };
+}
+
+/** The airport position, when the payload carries one. */
+export function airportPosition(lat: number | null, lon: number | null): LatLon | null {
+  if (typeof lat !== "number" || typeof lon !== "number") return null;
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  // FR24 sends 0,0 for an airport it does not know -- which is in the Atlantic.
+  if (lat === 0 && lon === 0) return null;
+  return [lat, lon];
 }
