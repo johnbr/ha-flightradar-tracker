@@ -37,7 +37,7 @@ Under construction, milestone by milestone.
 
 - [x] **M0** — repo, tooling, CI; the card registers and renders
 - [x] **M1** — `ha-map` mounts, fits to the area bounds, pan/zoom
-- [ ] **M2** — aircraft markers: rotated, patched in place per tick
+- [x] **M2** — aircraft markers: rotated, patched in place per tick
 - [ ] **M3** — track polylines
 - [ ] **M4** — selection and the detail panel
 - [ ] **M5** — route block with airport-local times, progress bar

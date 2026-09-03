@@ -10,6 +10,7 @@
 import { LitElement, html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
 import { CARD_TYPE, parseConfig, type ParsedConfig } from "./config";
+import { diffFlights, flightLabel, indexById, isHelicopter, isOnGround, parseFlights } from "./flights";
 import { boundsCenter, boundsCorners, parseBounds, type AreaBounds } from "./geo";
 import {
   ensureHaMap,
@@ -18,10 +19,12 @@ import {
   type LeafletLayerGroup,
   type LeafletLike,
   type LeafletMap,
+  type LeafletMarker,
   type LeafletPathLayer,
 } from "./ha-map";
+import { aircraftIcon, type AircraftIconStyle, type AircraftShape } from "./markers";
 import { cardStyles } from "./styles";
-import type { HassEntity, HomeAssistant } from "./types";
+import type { Flight, HassEntity, HomeAssistant } from "./types";
 
 /**
  * Read the version from this module's own URL rather than baking it in.
@@ -49,11 +52,19 @@ const MAP_HEIGHT = 380;
  */
 const FIT_PAD = 0.05;
 
+/** Aircraft icon box in pixels. Becomes the `icon_size` option in M6. */
+const ICON_SIZE = 28;
+
 /** mdi:crosshairs-gps */
 const RECENTRE_PATH =
   "M12,8A4,4 0 0,1 16,12A4,4 0 0,1 12,16A4,4 0 0,1 8,12A4,4 0 0,1 12,8M3.05,13H1V11H3.05C3.5,6.83 6.83,3.5 " +
   "11,3.05V1H13V3.05C17.17,3.5 20.5,6.83 20.95,11H23V13H20.95C20.5,17.17 17.17,20.5 13,20.95V23H11V20.95C6.83," +
   "20.5 3.5,17.17 3.05,13M12,5A7,7 0 0,0 5,12A7,7 0 0,0 12,19A7,7 0 0,0 19,12A7,7 0 0,0 12,5Z";
+
+/** markers.ts stays runtime-import-free, so the card adapts the flight for it. */
+function shapeOf(flight: Flight): AircraftShape {
+  return { heading: flight.heading, helicopter: isHelicopter(flight), grounded: isOnGround(flight) };
+}
 
 interface CustomCard {
   type: string;
@@ -117,10 +128,21 @@ export class FlightMapCard extends LitElement {
    * order is draw order within Leaflet's overlay pane.
    */
   private _baseLayer?: LeafletLayerGroup;
+  /** Aircraft markers, above the area furniture. */
+  private _markerLayer?: LeafletLayerGroup;
   private _centreMarker?: LeafletPathLayer;
+  /** One marker per flight id -- the identity that survives a tick. */
+  private _markers = new Map<string, LeafletMarker>();
+  /** What the markers currently show, so the next tick can be diffed. */
+  private _drawn = new Map<string, Flight>();
+  /** Memo of the parsed attribute, keyed on the entity fingerprint. */
+  private _parsedFor = "";
+  private _parsed: Flight[] = [];
   /** The area is fitted exactly once per map instance -- never on a data tick. */
   private _fitted = false;
   private _syncing = false;
+  /** A tick that arrived mid-sync, so it is not silently dropped for 60 s. */
+  private _resync = false;
 
   set hass(hass: HomeAssistant) {
     this._hass = hass;
@@ -160,7 +182,10 @@ export class FlightMapCard extends LitElement {
     // references -- keeping them would leave _syncMap believing it is set up.
     this._mapInstance = undefined;
     this._baseLayer = undefined;
+    this._markerLayer = undefined;
     this._centreMarker = undefined;
+    this._markers.clear();
+    this._drawn.clear();
     this._fitted = false;
     super.disconnectedCallback();
   }
@@ -175,12 +200,26 @@ export class FlightMapCard extends LitElement {
     // The FR24 coordinator ticks once every 60 s, so state + last_updated is a
     // complete fingerprint of the flights array without walking it.
     const st = this._hass?.states?.[entity];
-    return st ? `${st.state}|${st.last_updated}` : "missing";
+    return st ? `${entity}|${st.state}|${st.last_updated}` : `${entity}|missing`;
   }
 
   private _entity(): HassEntity | undefined {
     const entity = this._config?.entity;
     return entity ? this._hass?.states?.[entity] : undefined;
+  }
+
+  /**
+   * The parsed flights for the current tick.
+   *
+   * Memoised on the fingerprint because both the header and the marker sync
+   * want it, and re-parsing per render would undo the point of the guard.
+   */
+  private _flights(): Flight[] {
+    if (this._parsedFor !== this._signature) {
+      this._parsedFor = this._signature;
+      this._parsed = parseFlights(this._entity()?.attributes?.flights);
+    }
+    return this._parsed;
   }
 
   private _bounds(): AreaBounds | null {
@@ -218,7 +257,14 @@ export class FlightMapCard extends LitElement {
    * pass it does one identity comparison and one `setLatLng`.
    */
   private async _syncMap(): Promise<void> {
-    if (this._syncing || this._mapAvailable !== true) return;
+    if (this._mapAvailable !== true) return;
+    if (this._syncing) {
+      // A data tick landed while the map was still coming up. Remember it:
+      // dropping it would leave the aircraft stale until the next one, 60 s
+      // later.
+      this._resync = true;
+      return;
+    }
     const el = this._mapEl();
     if (!el) return;
 
@@ -229,13 +275,22 @@ export class FlightMapCard extends LitElement {
       if (!leaflet || !map) return;
 
       if (map !== this._mapInstance) {
+        // Add order is draw order in Leaflet's overlay pane: area furniture at
+        // the bottom, aircraft above it.
         this._mapInstance = map;
         this._baseLayer = leaflet.layerGroup().addTo(map);
+        this._markerLayer = leaflet.layerGroup().addTo(map);
         this._centreMarker = undefined;
+        // The old markers went down with the old map, so the next diff has to
+        // start from empty or every aircraft would be treated as unchanged and
+        // never re-added.
+        this._markers.clear();
+        this._drawn.clear();
         this._fitted = false;
       }
 
       this._drawAreaCentre(leaflet);
+      this._syncMarkers(leaflet);
 
       if (!this._fitted) {
         this._fitted = true;
@@ -248,7 +303,69 @@ export class FlightMapCard extends LitElement {
       }
     } finally {
       this._syncing = false;
+      if (this._resync) {
+        this._resync = false;
+        void this._syncMap();
+      }
     }
+  }
+
+  /**
+   * Patch the aircraft markers in place: add what arrived, move what moved,
+   * restyle what turned, remove what left.
+   *
+   * Never rebuilt wholesale. Clearing the layer each tick is the obvious
+   * implementation and it destroys marker identity -- the field blinks, and
+   * from M4 the selected aircraft loses its highlight every 60 seconds.
+   */
+  private _syncMarkers(leaflet: LeafletLike): void {
+    const layer = this._markerLayer;
+    if (!layer) return;
+
+    const flights = this._flights();
+    const diff = diffFlights(this._drawn, flights);
+    if (!diff.added.length && !diff.changed.length && !diff.removed.length) return;
+
+    const style = this._iconStyle();
+
+    for (const id of diff.removed) {
+      const marker = this._markers.get(id);
+      if (!marker) continue;
+      layer.removeLayer(marker);
+      this._markers.delete(id);
+    }
+
+    for (const flight of diff.added) {
+      const marker = leaflet.marker([flight.latitude, flight.longitude], {
+        icon: aircraftIcon(leaflet, shapeOf(flight), style),
+        // Native tooltip: enough to identify an aircraft before the detail
+        // panel exists, and it costs no DOM.
+        title: flightLabel(flight),
+        keyboard: false,
+      });
+      marker.addTo(layer);
+      this._markers.set(flight.id, marker);
+    }
+
+    for (const { flight, moved, restyled } of diff.changed) {
+      const marker = this._markers.get(flight.id);
+      if (!marker) continue;
+      if (moved) marker.setLatLng([flight.latitude, flight.longitude]);
+      if (restyled) marker.setIcon(aircraftIcon(leaflet, shapeOf(flight), style));
+    }
+
+    this._drawn = indexById(flights);
+  }
+
+  private _iconStyle(): AircraftIconStyle {
+    return {
+      size: ICON_SIZE,
+      // The text colour tracks the theme, and ha-map switches its tiles with
+      // the same theme, so the silhouette stays legible in both.
+      color: this._themeColor("--primary-text-color", "#212121"),
+      outline: this._themeColor("--card-background-color", "#ffffff"),
+      groundColor: this._themeColor("--disabled-text-color", "#8f8f8f"),
+    };
   }
 
   /** A small marker at the centre of the watched area. */
@@ -325,13 +442,15 @@ export class FlightMapCard extends LitElement {
     if (!config) return nothing;
 
     const st = this._entity();
-    const count = st ? Number.parseInt(st.state, 10) : Number.NaN;
+    // The count of what is actually on the map, not the sensor's own state:
+    // this card is the map, and a row with no usable position is not drawn.
+    const count = this._flights().length;
 
     return html`
       <ha-card>
         <div class="header">
           <div class="title">${this._title(st)}</div>
-          ${st && Number.isFinite(count) ? html`<div class="count">${count} aircraft</div>` : nothing}
+          ${st ? html`<div class="count">${count} aircraft</div>` : nothing}
         </div>
         ${st
           ? this._renderMap()

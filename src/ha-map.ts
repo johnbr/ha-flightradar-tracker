@@ -39,6 +39,8 @@
 export interface LeafletLike {
   layerGroup(layers?: LeafletLayer[]): LeafletLayerGroup;
   circleMarker(latlng: LatLngTuple, options?: Record<string, unknown>): LeafletPathLayer;
+  marker(latlng: LatLngTuple, options?: Record<string, unknown>): LeafletMarker;
+  divIcon(options: Record<string, unknown>): LeafletDivIcon;
 }
 
 export type LatLngTuple = [number, number];
@@ -52,6 +54,16 @@ export interface LeafletPathLayer extends LeafletLayer {
   setLatLng(latlng: LatLngTuple): this;
   setStyle(style: Record<string, unknown>): this;
   bindTooltip(content: string, options?: Record<string, unknown>): this;
+}
+
+/** Opaque to us: built by `divIcon`, handed straight back to a marker. */
+export type LeafletDivIcon = { readonly __divIcon?: never };
+
+export interface LeafletMarker extends LeafletLayer {
+  setLatLng(latlng: LatLngTuple): this;
+  setIcon(icon: LeafletDivIcon): this;
+  setZIndexOffset(offset: number): this;
+  on(event: string, handler: (event: unknown) => void): this;
 }
 
 export interface LeafletLayerGroup extends LeafletLayer {
