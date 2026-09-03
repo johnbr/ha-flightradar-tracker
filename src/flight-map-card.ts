@@ -679,17 +679,29 @@ export class FlightMapCard extends LitElement {
   }
 
   /**
-   * Select an aircraft: repaint the two markers involved, raise its trail, and
-   * ease the map to it.
+   * Select an aircraft, or deselect it if it is already the selected one:
+   * repaint the markers involved, raise its trail, and ease the map to it.
+   *
+   * TAPPING THE SELECTED AIRCRAFT AGAIN CLEARS THE SELECTION, and without that
+   * there is no way back to the empty panel at all -- the only other thing that
+   * clears it is the aircraft leaving the watched area, which can be twenty
+   * minutes of reading stale-looking detail for something no longer of
+   * interest.
+   *
+   * Deselecting deliberately does NOT pan. The pan exists to bring a newly
+   * chosen aircraft into view; moving the map as a parting gesture would take
+   * the reader somewhere they did not ask to go.
    *
    * `panTo` and not a fit: the zoom the reader chose is theirs, and changing it
    * under a tap is the same offence as re-fitting on a data tick.
    */
   private _select(id: string): void {
-    if (this._selectedId === id) return;
     const previous = this._selectedId;
-    this._selectedId = id;
+    this._selectedId = previous === id ? undefined : id;
+    // Repaints both ends in one pass, and copes with either being absent -- so
+    // this covers select, switch and deselect without branching three ways.
     this._paintSelection(previous);
+    if (this._selectedId === undefined) return;
 
     const flight = this._drawn.get(id);
     if (flight) this._mapInstance?.panTo([flight.latitude, flight.longitude], { animate: true });

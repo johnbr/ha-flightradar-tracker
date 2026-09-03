@@ -43,7 +43,8 @@ Three deliberate choices:
 - **Rotated, per-kind icons.** Aircraft point where they are going. Helicopters get their own
   top-down symbol, and anything on the ground is dimmed.
 - **Tracks.** Each aircraft's recent trail, from the sensor's own `coordinates` array.
-- **Tap for the detail.** Below the map, never over it: callsign, type and registration,
+- **Tap for the detail, tap again to dismiss it.** Tapping another aircraft moves the panel
+  straight to it. Below the map, never over it: callsign, type and registration,
   airline, photo, the route with **each airport's own local times** (and the airline "+1" for
   a red-eye), a great-circle progress bar with distance flown, distance to run and time
   remaining, then altitude, vertical speed, track, ground speed, distance, closest approach,
