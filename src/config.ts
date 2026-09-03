@@ -99,7 +99,14 @@ export const DEFAULTS = {
    * dark map.
    */
   theme_mode: "auto",
-  show_tracks: true,
+  /**
+   * Off. The trails are the card's most expensive thing to look at: at ~30
+   * aircraft, most of them circuit traffic turning continuously around a GA
+   * field, 30 overlapping 50-point polylines read as scribble rather than as
+   * context, and they are drawn faint precisely because they are not the
+   * subject. Set `show_tracks: true` to bring them back per card.
+   */
+  show_tracks: false,
   /**
    * On by default: the airports are what turn a ring of circuit traffic into
    * "that is Chino". They come from the flights themselves, so they cost no

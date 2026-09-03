@@ -43,6 +43,8 @@ Three deliberate choices:
 - **Rotated, per-kind icons.** Aircraft point where they are going. Helicopters get their own
   top-down symbol, and anything on the ground is dimmed.
 - **Tracks.** Each aircraft's recent trail, from the sensor's own `coordinates` array.
+  **Off by default** — set `show_tracks: true`. Over a busy GA field the trails overlap into
+  scribble, and they are drawn faint precisely because they are context, not the subject.
 - **Tap for the detail, tap again to dismiss it.** Tapping another aircraft moves the panel
   straight to it. Below the map, never over it: callsign, type and registration,
   airline, photo, the route with **each airport's own local times** (and the airline "+1" for
@@ -143,7 +145,7 @@ this option existed.
 
 It moves the fit by *whole* zoom levels, so a fractional value is rejected rather than quietly
 rounded. `zoom` (a fixed zoom) overrides it entirely.
-| `show_tracks` | boolean | `true` | Draw each aircraft's recent track |
+| `show_tracks` | boolean | `false` | Draw each aircraft's recent track. Off by default — at ~30 aircraft, mostly circuit traffic, the overlapping trails read as scribble |
 | `show_area_center` | boolean | `true` | Mark the centre of the watched area |
 | `show_photo` | boolean | `true` | Show the aircraft photo in the detail panel |
 | `units.altitude` | `ft` \| `m` | `ft` | |

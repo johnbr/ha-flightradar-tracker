@@ -121,7 +121,7 @@ const SCHEMA = [
   },
 ];
 
-const DEFAULT_HINT = "tracks, centre mark and photo all on";
+const DEFAULT_HINT = "tracks off, airports, centre mark and photo on";
 
 /** `units` is nested in the config but flat in the form. */
 interface FormData extends Omit<ParsedConfig, "units" | "type"> {

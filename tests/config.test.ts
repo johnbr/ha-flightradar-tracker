@@ -135,7 +135,7 @@ test("parsing does not invent values; resolving fills them in", () => {
   const resolved = resolveConfig(parsed);
   assert.equal(resolved.map_height, 460);
   assert.equal(resolved.icon_size, 28);
-  assert.equal(resolved.show_tracks, true);
+  assert.equal(resolved.show_tracks, false);
   assert.equal(resolved.show_area_center, true);
   assert.equal(resolved.show_photo, true);
   assert.deepEqual(resolved.units, { altitude: "ft", speed: "mph", distance: "mi" });
@@ -205,4 +205,9 @@ test("theme_mode rejects anything ha-map would silently treat as light", () => {
     );
   }
   assert.throws(() => parseConfig({ entity: "sensor.x", theme_mode: 1 }), /must be one of/);
+});
+
+test("show_tracks is off by default but still opt-in-able", () => {
+  assert.equal(resolveConfig(parseConfig({ entity: "sensor.x" })).show_tracks, false);
+  assert.equal(resolveConfig(parseConfig({ entity: "sensor.x", show_tracks: true })).show_tracks, true);
 });
