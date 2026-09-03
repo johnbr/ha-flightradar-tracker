@@ -18,7 +18,9 @@ import {
   isOnGround,
   markerKey,
   parseFlights,
+  parseTrack,
   sortByDistance,
+  trackKey,
 } from "../src/flights.ts";
 import type { Flight } from "../src/types.ts";
 
@@ -149,6 +151,82 @@ test("an aircraft that only moved is moved, never restyled", () => {
   assert.equal(diff.changed.length, 1);
   assert.equal(diff.changed[0]?.moved, true);
   assert.equal(diff.changed[0]?.restyled, false);
+  assert.equal(diff.changed[0]?.retracked, false);
+});
+
+test("a track that grew is retracked without restyling the marker", () => {
+  const before = indexById([flight({ id: "a", coordinates: [[34, -117]] })]);
+  const diff = diffFlights(before, [
+    flight({
+      id: "a",
+      coordinates: [
+        [34, -117],
+        [34.01, -117.01],
+      ],
+    }),
+  ]);
+  assert.equal(diff.changed[0]?.retracked, true);
+  assert.equal(diff.changed[0]?.restyled, false);
+  assert.equal(diff.changed[0]?.moved, false);
+});
+
+test("track points are normalised, and unusable ones dropped", () => {
+  assert.deepEqual(
+    parseTrack([
+      [34.0799, -117.4565],
+      ["34.08", "-117.45"],
+      [34.08],
+      ["x", 1],
+      [91, 0],
+      [0, -181],
+      null,
+      "nope",
+    ]),
+    [
+      [34.0799, -117.4565],
+      [34.08, -117.45],
+    ]
+  );
+  assert.deepEqual(parseTrack(undefined), []);
+  assert.deepEqual(parseTrack("34,-117"), []);
+});
+
+test("an aircraft with no track carries an empty array, never undefined", () => {
+  assert.deepEqual(flight({ coordinates: undefined }).coordinates, []);
+});
+
+test("the track key changes when the window slides, not otherwise", () => {
+  const a = flight({
+    coordinates: [
+      [34, -117],
+      [34.01, -117.01],
+    ],
+  });
+  const same = flight({
+    coordinates: [
+      [34, -117],
+      [34.01, -117.01],
+    ],
+  });
+  // A tick appends a point and drops the oldest, so both ends and the length
+  // are what identify the window.
+  const grown = flight({
+    coordinates: [
+      [34, -117],
+      [34.01, -117.01],
+      [34.02, -117.02],
+    ],
+  });
+  const slid = flight({
+    coordinates: [
+      [34.01, -117.01],
+      [34.02, -117.02],
+    ],
+  });
+  assert.equal(trackKey(a), trackKey(same));
+  assert.notEqual(trackKey(a), trackKey(grown));
+  assert.notEqual(trackKey(a), trackKey(slid));
+  assert.equal(trackKey(flight({ coordinates: [] })), "0");
 });
 
 test("an aircraft that turned is restyled", () => {

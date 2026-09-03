@@ -41,6 +41,7 @@ export interface LeafletLike {
   circleMarker(latlng: LatLngTuple, options?: Record<string, unknown>): LeafletPathLayer;
   marker(latlng: LatLngTuple, options?: Record<string, unknown>): LeafletMarker;
   divIcon(options: Record<string, unknown>): LeafletDivIcon;
+  polyline(latlngs: LatLngTuple[], options?: Record<string, unknown>): LeafletPolyline;
 }
 
 export type LatLngTuple = [number, number];
@@ -64,6 +65,13 @@ export interface LeafletMarker extends LeafletLayer {
   setIcon(icon: LeafletDivIcon): this;
   setZIndexOffset(offset: number): this;
   on(event: string, handler: (event: unknown) => void): this;
+}
+
+export interface LeafletPolyline extends LeafletLayer {
+  setLatLngs(latlngs: LatLngTuple[]): this;
+  setStyle(style: Record<string, unknown>): this;
+  /** Raises the line above its siblings. Used for the selected track in M4. */
+  bringToFront(): this;
 }
 
 export interface LeafletLayerGroup extends LeafletLayer {

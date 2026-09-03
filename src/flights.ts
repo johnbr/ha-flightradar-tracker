@@ -24,6 +24,29 @@ function str(value: unknown): string | null {
 }
 
 /**
+ * The aircraft's recent track, oldest point first.
+ *
+ * This array is the ONLY source of a trail. `flights` is an unrecorded
+ * attribute upstream, so there is no history in the recorder to draw from --
+ * whatever the integration last sent is all there is, capped at 50 points.
+ * Measured live: it ends exactly on the aircraft's current position, so the
+ * line always reaches its marker.
+ */
+export function parseTrack(raw: unknown): [number, number][] {
+  if (!Array.isArray(raw)) return [];
+  const points: [number, number][] = [];
+  for (const point of raw) {
+    if (!Array.isArray(point) || point.length < 2) continue;
+    const lat = num(point[0]);
+    const lon = num(point[1]);
+    if (lat === null || lon === null) continue;
+    if (Math.abs(lat) > 90 || Math.abs(lon) > 180) continue;
+    points.push([lat, lon]);
+  }
+  return points;
+}
+
+/**
  * A stable identity for one aircraft.
  *
  * FR24's own `id` is the hex flight id and is what the coordinator keys on, so
@@ -56,6 +79,22 @@ export function markerKey(flight: Flight): string {
   const heading = flight.heading === null ? 0 : Math.round(flight.heading) % 360;
   const kind = isHelicopter(flight) ? "h" : "p";
   return `${kind}|${heading}|${isOnGround(flight) ? "g" : "a"}`;
+}
+
+/**
+ * A cheap fingerprint of the track, so a polyline is only re-pointed when its
+ * shape actually moved.
+ *
+ * The track is a sliding window: a tick appends a point and drops the oldest,
+ * so the length plus both ends identify it without walking 50 pairs per
+ * aircraft per tick.
+ */
+export function trackKey(flight: Flight): string {
+  const track = flight.coordinates;
+  if (!track.length) return "0";
+  const first = track[0]!;
+  const last = track[track.length - 1]!;
+  return `${track.length}|${first[0]},${first[1]}|${last[0]},${last[1]}`;
 }
 
 /**
@@ -98,6 +137,7 @@ export function parseFlights(raw: unknown): Flight[] {
       distance: num(row.distance),
       closest_distance: num(row.closest_distance),
       on_ground: num(row.on_ground),
+      coordinates: parseTrack(row.coordinates),
     });
   }
 
@@ -124,6 +164,8 @@ export interface FlightChange {
   moved: boolean;
   /** Its appearance changed: the marker needs `setIcon`. */
   restyled: boolean;
+  /** Its track grew or shifted: the polyline needs `setLatLngs`. */
+  retracked: boolean;
 }
 
 export interface FlightDiff {
@@ -154,7 +196,8 @@ export function diffFlights(previous: ReadonlyMap<string, Flight>, next: readonl
     }
     const moved = before.latitude !== flight.latitude || before.longitude !== flight.longitude;
     const restyled = markerKey(before) !== markerKey(flight);
-    if (moved || restyled) changed.push({ flight, moved, restyled });
+    const retracked = trackKey(before) !== trackKey(flight);
+    if (moved || restyled || retracked) changed.push({ flight, moved, restyled, retracked });
   }
 
   const removed: string[] = [];

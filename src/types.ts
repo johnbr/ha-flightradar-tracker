@@ -100,8 +100,12 @@ export interface Flight {
   /** Closest approach so far, kilometres. */
   closest_distance: number | null;
 
-  /** Track, oldest to newest, at most 50 points. */
-  coordinates?: [number, number][];
+  /**
+   * Track, oldest to newest, at most 50 points, ending on the aircraft's
+   * current position. Always present once parsed -- an aircraft with no track
+   * carries an empty array, never undefined.
+   */
+  coordinates: [number, number][];
   details_updated_at?: number | null;
 }
 

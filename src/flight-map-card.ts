@@ -21,6 +21,7 @@ import {
   type LeafletMap,
   type LeafletMarker,
   type LeafletPathLayer,
+  type LeafletPolyline,
 } from "./ha-map";
 import { aircraftIcon, type AircraftIconStyle, type AircraftShape } from "./markers";
 import { cardStyles } from "./styles";
@@ -54,6 +55,14 @@ const FIT_PAD = 0.05;
 
 /** Aircraft icon box in pixels. Becomes the `icon_size` option in M6. */
 const ICON_SIZE = 28;
+
+/**
+ * Track line weight and opacity. Deliberately faint: eleven 50-point trails is
+ * the normal case here, and they are context for the aircraft, not the subject.
+ * Becomes the `show_tracks` option in M6.
+ */
+const TRACK_WEIGHT = 2;
+const TRACK_OPACITY = 0.45;
 
 /** mdi:crosshairs-gps */
 const RECENTRE_PATH =
@@ -128,11 +137,15 @@ export class FlightMapCard extends LitElement {
    * order is draw order within Leaflet's overlay pane.
    */
   private _baseLayer?: LeafletLayerGroup;
-  /** Aircraft markers, above the area furniture. */
+  /** Aircraft tracks, between the area furniture and the markers. */
+  private _trackLayer?: LeafletLayerGroup;
+  /** Aircraft markers, on top. */
   private _markerLayer?: LeafletLayerGroup;
   private _centreMarker?: LeafletPathLayer;
   /** One marker per flight id -- the identity that survives a tick. */
   private _markers = new Map<string, LeafletMarker>();
+  /** One polyline per flight id, for aircraft with a track worth drawing. */
+  private _tracks = new Map<string, LeafletPolyline>();
   /** What the markers currently show, so the next tick can be diffed. */
   private _drawn = new Map<string, Flight>();
   /** Memo of the parsed attribute, keyed on the entity fingerprint. */
@@ -182,9 +195,11 @@ export class FlightMapCard extends LitElement {
     // references -- keeping them would leave _syncMap believing it is set up.
     this._mapInstance = undefined;
     this._baseLayer = undefined;
+    this._trackLayer = undefined;
     this._markerLayer = undefined;
     this._centreMarker = undefined;
     this._markers.clear();
+    this._tracks.clear();
     this._drawn.clear();
     this._fitted = false;
     super.disconnectedCallback();
@@ -279,18 +294,20 @@ export class FlightMapCard extends LitElement {
         // the bottom, aircraft above it.
         this._mapInstance = map;
         this._baseLayer = leaflet.layerGroup().addTo(map);
+        this._trackLayer = leaflet.layerGroup().addTo(map);
         this._markerLayer = leaflet.layerGroup().addTo(map);
         this._centreMarker = undefined;
-        // The old markers went down with the old map, so the next diff has to
+        // The old layers went down with the old map, so the next diff has to
         // start from empty or every aircraft would be treated as unchanged and
         // never re-added.
         this._markers.clear();
+        this._tracks.clear();
         this._drawn.clear();
         this._fitted = false;
       }
 
       this._drawAreaCentre(leaflet);
-      this._syncMarkers(leaflet);
+      this._syncFlights(leaflet);
 
       if (!this._fitted) {
         this._fitted = true;
@@ -318,21 +335,29 @@ export class FlightMapCard extends LitElement {
    * implementation and it destroys marker identity -- the field blinks, and
    * from M4 the selected aircraft loses its highlight every 60 seconds.
    */
-  private _syncMarkers(leaflet: LeafletLike): void {
-    const layer = this._markerLayer;
-    if (!layer) return;
+  private _syncFlights(leaflet: LeafletLike): void {
+    const markerLayer = this._markerLayer;
+    const trackLayer = this._trackLayer;
+    if (!markerLayer || !trackLayer) return;
 
     const flights = this._flights();
     const diff = diffFlights(this._drawn, flights);
     if (!diff.added.length && !diff.changed.length && !diff.removed.length) return;
 
     const style = this._iconStyle();
+    const trackColor = style.color;
 
     for (const id of diff.removed) {
       const marker = this._markers.get(id);
-      if (!marker) continue;
-      layer.removeLayer(marker);
-      this._markers.delete(id);
+      if (marker) {
+        markerLayer.removeLayer(marker);
+        this._markers.delete(id);
+      }
+      const track = this._tracks.get(id);
+      if (track) {
+        trackLayer.removeLayer(track);
+        this._tracks.delete(id);
+      }
     }
 
     for (const flight of diff.added) {
@@ -343,18 +368,65 @@ export class FlightMapCard extends LitElement {
         title: flightLabel(flight),
         keyboard: false,
       });
-      marker.addTo(layer);
+      marker.addTo(markerLayer);
       this._markers.set(flight.id, marker);
+      this._drawTrack(leaflet, flight, trackColor);
     }
 
-    for (const { flight, moved, restyled } of diff.changed) {
+    for (const { flight, moved, restyled, retracked } of diff.changed) {
       const marker = this._markers.get(flight.id);
-      if (!marker) continue;
-      if (moved) marker.setLatLng([flight.latitude, flight.longitude]);
-      if (restyled) marker.setIcon(aircraftIcon(leaflet, shapeOf(flight), style));
+      if (marker) {
+        if (moved) marker.setLatLng([flight.latitude, flight.longitude]);
+        if (restyled) marker.setIcon(aircraftIcon(leaflet, shapeOf(flight), style));
+      }
+      if (retracked) this._drawTrack(leaflet, flight, trackColor);
     }
 
     this._drawn = indexById(flights);
+  }
+
+  /**
+   * Draw or re-point one aircraft's trail.
+   *
+   * `coordinates` is the only source of a track: `flights` is an unrecorded
+   * attribute upstream, so the recorder holds no history to build one from.
+   *
+   * An existing line is re-pointed rather than replaced -- Leaflet updates the
+   * SVG path in place, where removing and re-adding would make the whole field
+   * of trails flicker once a minute.
+   */
+  private _drawTrack(leaflet: LeafletLike, flight: Flight, color: string): void {
+    const layer = this._trackLayer;
+    if (!layer) return;
+    const points = flight.coordinates;
+    const existing = this._tracks.get(flight.id);
+
+    // One point is a dot, not a trail, and reads as a rendering fault.
+    if (points.length < 2) {
+      if (existing) {
+        layer.removeLayer(existing);
+        this._tracks.delete(flight.id);
+      }
+      return;
+    }
+
+    if (existing) {
+      existing.setLatLngs(points);
+      return;
+    }
+
+    const line = leaflet.polyline(points, {
+      color,
+      weight: TRACK_WEIGHT,
+      opacity: TRACK_OPACITY,
+      lineJoin: "round",
+      lineCap: "round",
+      // The trail is context, not a control: a non-interactive line cannot
+      // swallow a tap meant for an aircraft, or a drag meant to pan the map.
+      interactive: false,
+    });
+    line.addTo(layer);
+    this._tracks.set(flight.id, line);
   }
 
   private _iconStyle(): AircraftIconStyle {
