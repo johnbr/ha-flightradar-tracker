@@ -69,6 +69,17 @@ const TRACK_OPACITY = 0.45;
 const SELECTED_TRACK_WEIGHT = 3;
 const SELECTED_TRACK_OPACITY = 0.9;
 
+/**
+ * Bounds on the glide between two fixes.
+ *
+ * The tween runs for however long the last gap between ticks was, so the
+ * aircraft arrives just as the next fix lands and the motion reads as
+ * continuous. The clamp covers the first tick after a load (whose "gap" is
+ * really time since mount) and a coordinator that has stalled.
+ */
+const GLIDE_MIN_MS = 1000;
+const GLIDE_MAX_MS = 30_000;
+
 /** mdi:crosshairs-gps */
 const RECENTRE_PATH =
   "M12,8A4,4 0 0,1 16,12A4,4 0 0,1 12,16A4,4 0 0,1 8,12A4,4 0 0,1 12,8M3.05,13H1V11H3.05C3.5,6.83 6.83,3.5 " +
@@ -166,14 +177,31 @@ export class FlightMapCard extends LitElement {
   /** The area is fitted exactly once per map instance -- never on a data tick. */
   private _fitted = false;
   private _syncing = false;
-  /** A tick that arrived mid-sync, so it is not silently dropped for 60 s. */
+  /** A tick that arrived mid-sync, so it is not silently dropped. */
   private _resync = false;
+
+  /** When the last tick was seen, and how long the gap before it was. */
+  private _lastTickAt = 0;
+  private _glideMs = GLIDE_MIN_MS;
+  /** Marker elements currently mid-glide, so the transition can be removed. */
+  private _gliding: HTMLElement[] = [];
+  private _glideTimer?: number;
 
   set hass(hass: HomeAssistant) {
     this._hass = hass;
     const signature = this._computeSignature();
     if (signature === this._signature) return;
     this._signature = signature;
+
+    // Time the gap between ticks rather than reading the integration's
+    // scan_interval, which the card cannot see and which the user can change
+    // from under it.
+    const now = Date.now();
+    if (this._lastTickAt) {
+      this._glideMs = Math.min(Math.max(now - this._lastTickAt, GLIDE_MIN_MS), GLIDE_MAX_MS);
+    }
+    this._lastTickAt = now;
+
     this.requestUpdate();
   }
 
@@ -203,6 +231,7 @@ export class FlightMapCard extends LitElement {
   }
 
   disconnectedCallback(): void {
+    this._endGlide();
     // The layers die with the map `ha-map` tears down, so this only drops our
     // references -- keeping them would leave _syncMap believing it is set up.
     this._mapInstance = undefined;
@@ -305,6 +334,10 @@ export class FlightMapCard extends LitElement {
         // Add order is draw order in Leaflet's overlay pane: area furniture at
         // the bottom, aircraft above it.
         this._mapInstance = map;
+        // Leaflet re-applies every marker's translate3d when a zoom settles.
+        // With a glide still armed, all of them would slide across the screen
+        // into their new pixel positions -- so the transitions come off first.
+        map.on("zoomstart", () => this._endGlide());
         this._baseLayer = leaflet.layerGroup().addTo(map);
         this._trackLayer = leaflet.layerGroup().addTo(map);
         this._markerLayer = leaflet.layerGroup().addTo(map);
@@ -392,11 +425,23 @@ export class FlightMapCard extends LitElement {
     for (const { flight, moved, restyled, retracked } of diff.changed) {
       const marker = this._markers.get(flight.id);
       if (marker) {
-        if (moved) marker.setLatLng([flight.latitude, flight.longitude]);
+        // Restyle FIRST: setIcon replaces the icon's element, which would throw
+        // away a transition armed on the old one and land the aircraft at its
+        // new fix instantly, mid-glide.
         if (restyled)
           marker.setIcon(aircraftIcon(leaflet, shapeOf(flight, flight.id === this._selectedId), style));
+        if (moved) {
+          this._glide(marker);
+          marker.setLatLng([flight.latitude, flight.longitude]);
+        }
       }
       if (retracked) this._drawTrack(leaflet, flight, style);
+    }
+
+    if (this._gliding.length) {
+      // One timer for the whole batch: they all started together.
+      window.clearTimeout(this._glideTimer);
+      this._glideTimer = window.setTimeout(() => this._endGlide(), this._glideMs + 200);
     }
 
     this._drawn = indexById(flights);
@@ -502,6 +547,37 @@ export class FlightMapCard extends LitElement {
     const marker = this._markers.get(id);
     if (flight && marker) marker.setIcon(aircraftIcon(leaflet, shapeOf(flight, true), style));
     this._tracks.get(id)?.setStyle(this._selectedTrackStyle(style)).bringToFront();
+  }
+
+  /**
+   * Slide a marker to its new fix instead of teleporting it.
+   *
+   * Leaflet positions a marker with `transform: translate3d(...)` on the icon's
+   * root element, so a transition on that property turns the next `setLatLng`
+   * into a glide. Every position drawn is on the straight line between two REAL
+   * fixes -- the aircraft reads as one tick late, never as somewhere it has not
+   * been, which is the difference between this and dead reckoning.
+   *
+   * The transition is armed per move and removed afterwards, because Leaflet
+   * also rewrites that transform on zoom and pane resets.
+   */
+  private _glide(marker: LeafletMarker): void {
+    // Someone who has asked for less motion gets the jump; it is the honest
+    // rendering anyway.
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    const element = marker.getElement();
+    if (!element) return;
+    element.style.transition = `transform ${this._glideMs}ms linear`;
+    this._gliding.push(element);
+  }
+
+  private _endGlide(): void {
+    if (this._glideTimer !== undefined) {
+      window.clearTimeout(this._glideTimer);
+      this._glideTimer = undefined;
+    }
+    for (const element of this._gliding) element.style.transition = "";
+    this._gliding = [];
   }
 
   private _selectedTrackStyle(style: AircraftIconStyle): Record<string, unknown> {

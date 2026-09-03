@@ -63,6 +63,8 @@ export type LeafletDivIcon = { readonly __divIcon?: never };
 export interface LeafletMarker extends LeafletLayer {
   setLatLng(latlng: LatLngTuple): this;
   setIcon(icon: LeafletDivIcon): this;
+  /** The icon's root element -- where Leaflet writes its translate3d. */
+  getElement(): HTMLElement | undefined;
   setZIndexOffset(offset: number): this;
   on(event: string, handler: (event: unknown) => void): this;
 }
@@ -85,6 +87,7 @@ export interface LeafletMap {
   invalidateSize(animate?: boolean): void;
   panTo(latlng: LatLngTuple, options?: Record<string, unknown>): void;
   getZoom(): number;
+  on(event: string, handler: () => void): this;
 }
 
 export interface HaMapElement extends HTMLElement {
