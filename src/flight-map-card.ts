@@ -490,6 +490,12 @@ export class FlightMapCard extends LitElement {
         // With a glide still armed, all of them would slide across the screen
         // into their new pixel positions -- so the transitions come off first.
         map.on("zoomstart", () => this._suspendForZoom());
+        // `viewreset` covers the other way Leaflet rewrites every marker
+        // transform at once: a pan too big to animate falls back to a full
+        // reset, and selecting an aircraft on the far edge of the map is
+        // exactly that pan. Without this the whole field slides into place
+        // after a tap, which is the jerk predicted motion exists to remove.
+        map.on("viewreset", () => this._suspendForZoom());
         map.on("zoomend", () => {
           this._zoomingUntil = 0;
         });
