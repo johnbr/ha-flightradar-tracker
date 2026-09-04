@@ -62,6 +62,8 @@ export type LeafletDivIcon = { readonly __divIcon?: never };
 
 export interface LeafletMarker extends LeafletLayer {
   setLatLng(latlng: LatLngTuple): this;
+  /** Where the marker is DRAWN, which under predicted motion is not the fix. */
+  getLatLng(): { lat: number; lng: number };
   setIcon(icon: LeafletDivIcon): this;
   /** The icon's root element -- where Leaflet writes its translate3d. */
   getElement(): HTMLElement | undefined;

@@ -15,6 +15,7 @@ import {
   EDITOR_TYPE,
   parseConfig,
   resolveConfig,
+  type MotionMode,
   type ResolvedConfig,
 } from "./config";
 import {
@@ -31,6 +32,7 @@ import {
   boundsCorners,
   padForZoomOffset,
   parseBounds,
+  projectKm,
   travelHeading,
   type AreaBounds,
 } from "./geo";
@@ -46,6 +48,7 @@ import {
   type LeafletPolyline,
 } from "./ha-map";
 import { renderDetail, renderEmptyDetail } from "./detail";
+import { MotionTracker, type MotionFix } from "./motion";
 import { aircraftIcon, airportIcon, type AircraftIconStyle, type AircraftShape } from "./markers";
 import { cardStyles } from "./styles";
 import type { Flight, HassEntity, HomeAssistant } from "./types";
@@ -84,7 +87,7 @@ const SELECTED_TRACK_WEIGHT = 3;
 const SELECTED_TRACK_OPACITY = 0.9;
 
 /**
- * Bounds on the glide between two fixes.
+ * Bounds on the glide between two fixes -- `motion: glide` only.
  *
  * The tween runs for however long the last gap between ticks was, so the
  * aircraft arrives just as the next fix lands and the motion reads as
@@ -96,15 +99,34 @@ const SELECTED_TRACK_OPACITY = 0.9;
  * then motion again. That is not hypothetical: the ceiling was 30 s, and the
  * integration's actual cycle is its scan_interval PLUS however long a refresh
  * takes, which was measured here at 44-90 s because it fetches per-flight
- * details serially. So the aircraft glided for 30 s and stopped for 30.
+ * details serially.
  *
- * 120 s clears the measured cycle with headroom for a busier area (the cost is
- * linear in aircraft count). Past that the feed has genuinely stalled, and
- * freezing is the honest thing to draw -- a two-minute crawl toward a fix that
- * may never be superseded would be inventing motion.
+ * Raising the ceiling was not enough, which is why this is no longer the
+ * default. Sizing the tween from the LAST gap is a bet that the next one is no
+ * longer, and on this feed the period grows with the traffic, so the bet loses
+ * on the way up: measured, 12 % of wall time frozen over ten minutes and 18 %
+ * over its busy half. Erring long instead only trades the stall for lag, one
+ * tick of it per multiple. See motion.ts for the measurements and for what
+ * `motion: predicted` does instead.
  */
 const GLIDE_MIN_MS = 1000;
 const GLIDE_MAX_MS = 120_000;
+
+/**
+ * How often a predicted aircraft is re-aimed.
+ *
+ * Deliberately a whole second rather than an animation frame. Each step arms a
+ * CSS transition of exactly one step and aims at where the aircraft WILL be one
+ * step from now, so the browser does the in-between drawing on the compositor
+ * at display rate -- the JS only has to hand it a new target once a second. A
+ * requestAnimationFrame loop would write sixty times as many styles per marker
+ * to produce the same picture, on a dashboard that already logs websocket
+ * backpressure.
+ *
+ * It also means a late step degrades into a slightly longer straight segment
+ * rather than into a stall.
+ */
+const MOTION_STEP_MS = 1000;
 
 /** mdi:crosshairs-gps */
 const RECENTRE_PATH =
@@ -115,15 +137,38 @@ const RECENTRE_PATH =
 /** markers.ts stays runtime-import-free, so the card adapts the flight for it. */
 function shapeOf(flight: Flight, selected: boolean): AircraftShape {
   return {
-    // The travelled bearing where there is one, so the aircraft points the way
-    // it is visibly moving; `heading_display` falls back to the reported
-    // heading itself, so this is never worse than the raw value.
+    // The way the marker is being MOVED, which is not always the reported
+    // heading -- see `_displayHeading`. Falls back to the reported heading, so
+    // this is never worse than the raw value.
     heading: flight.heading_display ?? flight.heading,
     kind: aircraftKind(flight),
     grounded: isOnGround(flight),
     selected,
   };
 }
+
+/** motion.ts stays runtime-import-free, so the card adapts the flight for it. */
+function fixOf(flight: Flight, at: number): MotionFix {
+  return {
+    lat: flight.latitude,
+    lon: flight.longitude,
+    speed: flight.ground_speed,
+    heading: flight.heading,
+    grounded: isOnGround(flight),
+    at,
+  };
+}
+
+/**
+ * How long after a zoom starts to leave the markers alone.
+ *
+ * Leaflet rewrites every marker transform as a zoom settles; a motion step
+ * landing in that window would race it. `zoomend` clears the guard, and this is
+ * only the backstop for a zoom that somehow never ends -- expiring on its own
+ * means a missed event costs a second of stillness, not a permanently frozen
+ * map.
+ */
+const ZOOM_GUARD_MS = 2000;
 
 /**
  * Minimum movement between two fixes before the segment is trusted to say
@@ -230,6 +275,18 @@ export class FlightMapCard extends LitElement {
   private _gliding: HTMLElement[] = [];
   private _glideTimer?: number;
 
+  /** Predicted motion: one fix per aircraft, and the step timer that flies them. */
+  private readonly _motion = new MotionTracker();
+  private _motionTimer?: number;
+  /**
+   * Leaflet rewrites every marker transform when a zoom settles, so a step
+   * landing mid-zoom would race it. Steps are simply skipped while zooming --
+   * the next one is at most a second away.
+   */
+  private _zoomingUntil = 0;
+  /** When the last motion step ran, so a late one can redraw instead of slide. */
+  private _lastStepAt = 0;
+
   set hass(hass: HomeAssistant) {
     this._hass = hass;
     const signature = this._computeSignature();
@@ -242,6 +299,9 @@ export class FlightMapCard extends LitElement {
     const now = Date.now();
     if (this._lastTickAt) {
       this._glideMs = Math.min(Math.max(now - this._lastTickAt, GLIDE_MIN_MS), GLIDE_MAX_MS);
+      // The same measurement sizes how long a prediction correction is spread
+      // over: one feed period, so it is absorbed before the next fix lands.
+      this._motion.setGapMs(this._glideMs);
     }
     this._lastTickAt = now;
 
@@ -304,6 +364,8 @@ export class FlightMapCard extends LitElement {
 
   disconnectedCallback(): void {
     this._endGlide();
+    this._stopMotion();
+    this._motion.clear();
     // The layers die with the map `ha-map` tears down, so this only drops our
     // references -- keeping them would leave _syncMap believing it is set up.
     this._mapInstance = undefined;
@@ -327,6 +389,8 @@ export class FlightMapCard extends LitElement {
   /** Empty every layer and forget what was drawn, so the next sync rebuilds. */
   private _resetDrawing(): void {
     this._endGlide();
+    this._stopMotion();
+    this._motion.clear();
     this._baseLayer?.clearLayers();
     this._trackLayer?.clearLayers();
     this._markerLayer?.clearLayers();
@@ -425,7 +489,10 @@ export class FlightMapCard extends LitElement {
         // Leaflet re-applies every marker's translate3d when a zoom settles.
         // With a glide still armed, all of them would slide across the screen
         // into their new pixel positions -- so the transitions come off first.
-        map.on("zoomstart", () => this._endGlide());
+        map.on("zoomstart", () => this._suspendForZoom());
+        map.on("zoomend", () => {
+          this._zoomingUntil = 0;
+        });
         this._baseLayer = leaflet.layerGroup().addTo(map);
         // Added before the tracks and the aircraft, so airports sit underneath
         // both: they are the fixed reference, never the subject.
@@ -439,11 +506,16 @@ export class FlightMapCard extends LitElement {
         this._markers.clear();
         this._tracks.clear();
         this._drawn.clear();
+        this._motion.clear();
         this._fitted = false;
       }
 
       this._drawAreaCentre(leaflet);
       this._syncFlights(leaflet);
+      // Started here rather than on connect: it needs the markers, and the
+      // mode can change under it when the config is edited.
+      if (this._motionMode() === "predicted") this._startMotion();
+      else this._stopMotion();
 
       if (!this._fitted) {
         this._fitted = true;
@@ -477,19 +549,12 @@ export class FlightMapCard extends LitElement {
     if (!markerLayer || !trackLayer) return;
 
     const flights = this._flights();
+    const mode = this._motionMode();
     // Point each aircraft the way it is actually travelling, BEFORE diffing:
     // markerKey reads `heading_display`, so computing it afterwards would leave
     // the icon a tick behind the position it belongs to.
     for (const flight of flights) {
-      const before = this._drawn.get(flight.id);
-      flight.heading_display = before
-        ? travelHeading(
-            [before.latitude, before.longitude],
-            [flight.latitude, flight.longitude],
-            flight.heading,
-            TRAVEL_MIN_KM
-          )
-        : flight.heading;
+      flight.heading_display = this._displayHeading(flight, mode);
     }
     this._syncAirports(leaflet, flights);
 
@@ -497,6 +562,9 @@ export class FlightMapCard extends LitElement {
     if (!diff.added.length && !diff.changed.length && !diff.removed.length) return;
 
     const style = this._iconStyle();
+    // One clock reading for the whole batch, so every fix in this tick is
+    // projected from the same instant.
+    const at = Date.now();
 
     for (const id of diff.removed) {
       const marker = this._markers.get(id);
@@ -504,6 +572,7 @@ export class FlightMapCard extends LitElement {
         markerLayer.removeLayer(marker);
         this._markers.delete(id);
       }
+      this._motion.forget(id);
       const track = this._tracks.get(id);
       if (track) {
         trackLayer.removeLayer(track);
@@ -526,6 +595,7 @@ export class FlightMapCard extends LitElement {
       marker.on("click", () => this._select(id));
       marker.addTo(markerLayer);
       this._markers.set(id, marker);
+      if (mode === "predicted") this._motion.update(id, fixOf(flight, at));
       this._drawTrack(leaflet, flight, style);
     }
 
@@ -537,9 +607,19 @@ export class FlightMapCard extends LitElement {
         // new fix instantly, mid-glide.
         if (restyled)
           marker.setIcon(aircraftIcon(leaflet, shapeOf(flight, flight.id === this._selectedId), style));
+        // A tick that did not MOVE the aircraft is not a new fix: taking it on
+        // as one would reset the extrapolation clock and snap a predicted
+        // marker back to a position it had already flown past.
         if (moved) {
-          this._glide(marker);
-          marker.setLatLng([flight.latitude, flight.longitude]);
+          if (mode === "predicted") {
+            // Where the marker is aimed right now, so the tracker can fade the
+            // correction out from THERE rather than from a recomputed guess.
+            const drawnAt = marker.getLatLng();
+            this._motion.update(flight.id, fixOf(flight, at), drawnAt.lat, drawnAt.lng);
+          } else {
+            if (mode === "glide") this._glide(marker);
+            marker.setLatLng([flight.latitude, flight.longitude]);
+          }
         }
       }
       if (retracked) this._drawTrack(leaflet, flight, style);
@@ -703,8 +783,18 @@ export class FlightMapCard extends LitElement {
     this._paintSelection(previous);
     if (this._selectedId === undefined) return;
 
+    // The MARKER's position, not the fix's: under predicted motion the aircraft
+    // is drawn ahead of its last fix, and panning to the fix would leave the
+    // thing that was just tapped off centre by however far it has flown.
+    const marker = this._markers.get(id);
+    const at = marker?.getLatLng();
     const flight = this._drawn.get(id);
-    if (flight) this._mapInstance?.panTo([flight.latitude, flight.longitude], { animate: true });
+    const centre: [number, number] | undefined = at
+      ? [at.lat, at.lng]
+      : flight
+        ? [flight.latitude, flight.longitude]
+        : undefined;
+    if (centre) this._mapInstance?.panTo(centre, { animate: true });
   }
 
   /** Move the selected look from one aircraft to another. */
@@ -761,6 +851,111 @@ export class FlightMapCard extends LitElement {
     }
     for (const element of this._gliding) element.style.transition = "";
     this._gliding = [];
+  }
+
+  /**
+   * How the aircraft move, with the accessibility override applied.
+   *
+   * `prefers-reduced-motion` wins over the config outright: someone who has
+   * asked their operating system for less motion is not asking this card's
+   * opinion, and jumping to each fix is the honest rendering anyway.
+   */
+  private _motionMode(): MotionMode {
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return "none";
+    return this._config?.motion ?? DEFAULTS.motion;
+  }
+
+  /**
+   * Which way to point the marker.
+   *
+   * It has to point the way the marker is being MOVED, or it reads as an
+   * aircraft flying sideways -- and the two modes move it differently.
+   * Interpolating slides it along the segment between two fixes, so that
+   * segment's bearing is the right answer (see travelHeading). Predicting
+   * carries it along the REPORTED heading, so that is what the icon must use:
+   * pointing a turning aircraft down the bearing of the leg it has just flown
+   * would aim it at where it has been while it flies where it is going.
+   */
+  private _displayHeading(flight: Flight, mode: MotionMode): number | null {
+    if (mode === "predicted") return flight.heading;
+    const before = this._drawn.get(flight.id);
+    if (!before) return flight.heading;
+    return travelHeading(
+      [before.latitude, before.longitude],
+      [flight.latitude, flight.longitude],
+      flight.heading,
+      TRAVEL_MIN_KM
+    );
+  }
+
+  private _startMotion(): void {
+    if (this._motionTimer !== undefined) return;
+    this._lastStepAt = 0;
+    this._motionTimer = window.setInterval(() => this._stepMotion(), MOTION_STEP_MS);
+  }
+
+  private _stopMotion(): void {
+    if (this._motionTimer === undefined) return;
+    window.clearInterval(this._motionTimer);
+    this._motionTimer = undefined;
+    // Leave no armed transitions behind. Stopping can mean the mode changed
+    // under the card -- a config edit, or the reader turning reduced-motion on
+    // -- and a leftover transition would animate the very next fix, which is
+    // exactly what the mode they just chose says not to do.
+    for (const marker of this._markers.values()) {
+      const element = marker.getElement();
+      if (element) element.style.transition = "";
+    }
+  }
+
+  /**
+   * Fly every predicted aircraft one step.
+   *
+   * Each marker is aimed at where it will be one step from NOW and given a
+   * transition of exactly one step, so the browser draws the in-between frames
+   * itself. That is what makes a once-a-second timer enough for motion that
+   * looks continuous.
+   *
+   * A step that arrives late -- a backgrounded tab, a throttled timer, a long
+   * main-thread stall -- would otherwise animate the whole catch-up across the
+   * map as one slow slide. Past two steps the correction is applied without a
+   * transition instead: an aircraft that is somewhere else should be redrawn
+   * there, not seen travelling there.
+   */
+  private _stepMotion(): void {
+    const now = Date.now();
+    // Neither early return advances the clock, and that is the point: whatever
+    // comes next is then correctly seen as late and redraws instead of sliding.
+    // A hidden tab still fires this timer (throttled to about this interval),
+    // so without that it would come back believing it had never missed a step
+    // and animate minutes of flight across the map in one second.
+    if (now < this._zoomingUntil) return;
+    if (document.hidden || !this._markers.size) return;
+
+    const late = this._lastStepAt !== 0 && now - this._lastStepAt > MOTION_STEP_MS * 2;
+    this._lastStepAt = now;
+    const target = now + MOTION_STEP_MS;
+
+    for (const [id, marker] of this._markers) {
+      const step = this._motion.step(id, target);
+      if (!step) continue;
+      const [lat, lon] = projectKm([step.fromLat, step.fromLon], step.bearing, step.km);
+      const element = marker.getElement();
+      if (element) {
+        element.style.transition = late ? "" : `transform ${MOTION_STEP_MS}ms linear`;
+      }
+      marker.setLatLng([lat + step.residualLat, lon + step.residualLon]);
+    }
+  }
+
+  /** Hand the markers back to Leaflet for the length of a zoom. */
+  private _suspendForZoom(): void {
+    this._zoomingUntil = Date.now() + ZOOM_GUARD_MS;
+    this._endGlide();
+    for (const marker of this._markers.values()) {
+      const element = marker.getElement();
+      if (element) element.style.transition = "";
+    }
   }
 
   private _selectedTrackStyle(style: AircraftIconStyle): Record<string, unknown> {

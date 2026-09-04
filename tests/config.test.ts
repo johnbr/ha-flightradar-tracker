@@ -207,6 +207,29 @@ test("theme_mode rejects anything ha-map would silently treat as light", () => {
   assert.throws(() => parseConfig({ entity: "sensor.x", theme_mode: 1 }), /must be one of/);
 });
 
+test("motion defaults to predicted", () => {
+  assert.equal(resolveConfig(parseConfig({ entity: "sensor.x" })).motion, "predicted");
+});
+
+test("motion accepts each supported mode", () => {
+  for (const mode of ["predicted", "glide", "none"]) {
+    assert.equal(parseConfig({ entity: "sensor.x", motion: mode }).motion, mode);
+  }
+});
+
+test("motion rejects anything that is not a mode", () => {
+  // "smooth" and "animate" are what someone would guess, and either silently
+  // falling back to the default or silently disabling motion would leave the
+  // dashboard looking exactly as if the option had worked.
+  for (const bad of ["smooth", "animate", "Predicted", "", true]) {
+    assert.throws(
+      () => parseConfig({ entity: "sensor.x", motion: bad }),
+      /must be one of predicted, glide, none/,
+      `expected ${JSON.stringify(bad)} to be rejected`
+    );
+  }
+});
+
 test("show_tracks is off by default but still opt-in-able", () => {
   assert.equal(resolveConfig(parseConfig({ entity: "sensor.x" })).show_tracks, false);
   assert.equal(resolveConfig(parseConfig({ entity: "sensor.x", show_tracks: true })).show_tracks, true);

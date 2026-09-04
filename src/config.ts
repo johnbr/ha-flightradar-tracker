@@ -33,6 +33,7 @@ const KNOWN_KEYS = new Set([
   "show_area_center",
   "show_photo",
   "icon_size",
+  "motion",
   "units",
 ]);
 
@@ -59,6 +60,22 @@ export const DEFAULT_UNITS: Units = { altitude: "ft", speed: "mph", distance: "m
  */
 export const THEME_MODES = ["auto", "light", "dark"] as const;
 export type ThemeMode = (typeof THEME_MODES)[number];
+
+/**
+ * How the aircraft move between fixes.
+ *
+ * - `predicted` -- each aircraft is carried forward from its last fix along its
+ *   reported heading at its reported ground speed, and the next fix is faded in
+ *   rather than snapped to. Continuous motion, and MORE accurate than the
+ *   alternatives on this feed, not less: see the measurements in motion.ts.
+ * - `glide` -- the old behaviour: slide along the line between the last two
+ *   real fixes, nothing extrapolated. Honest, but it draws a whole tick late
+ *   and it stalls whenever the feed's period grows, which it does with traffic.
+ * - `none` -- jump to each new fix. What `prefers-reduced-motion` forces
+ *   regardless of this setting.
+ */
+export const MOTION_MODES = ["predicted", "glide", "none"] as const;
+export type MotionMode = (typeof MOTION_MODES)[number];
 
 const UNIT_VALUES = {
   altitude: ["ft", "m"],
@@ -116,6 +133,14 @@ export const DEFAULTS = {
   show_area_center: true,
   show_photo: true,
   icon_size: 28,
+  /**
+   * Predicted. The feed's period here is 23-72 s and grows with the number of
+   * aircraft overhead, so an interpolated marker spends a measured 12-18 % of
+   * its life frozen and is a median 1.75 km behind the aircraft even while it
+   * is moving. Predicting is continuous AND closer to the truth (median
+   * 0.70 km). The measurements are in motion.ts.
+   */
+  motion: "predicted",
 } as const;
 
 function fail(message: string): never {
@@ -138,6 +163,8 @@ export interface ParsedConfig {
   show_area_center?: boolean;
   show_photo?: boolean;
   icon_size?: number;
+  /** How the aircraft move between fixes. */
+  motion?: MotionMode;
   units?: Partial<Units>;
 }
 
@@ -155,6 +182,7 @@ export interface ResolvedConfig {
   show_area_center: boolean;
   show_photo: boolean;
   icon_size: number;
+  motion: MotionMode;
   units: Units;
 }
 
@@ -221,6 +249,14 @@ export function parseConfig(raw: unknown): ParsedConfig {
     parsed.theme_mode = themeMode as ThemeMode;
   }
 
+  const motion = cfg.motion;
+  if (motion !== undefined) {
+    if (typeof motion !== "string" || !(MOTION_MODES as readonly string[]).includes(motion)) {
+      fail(`\`motion\` must be one of ${MOTION_MODES.join(", ")}, got ${JSON.stringify(motion)}`);
+    }
+    parsed.motion = motion as MotionMode;
+  }
+
   const units = cfg.units;
   if (units !== undefined) {
     if (!units || typeof units !== "object" || Array.isArray(units)) fail("`units` must be a mapping");
@@ -261,6 +297,7 @@ export function resolveConfig(parsed: ParsedConfig): ResolvedConfig {
     icon_size: parsed.icon_size ?? DEFAULTS.icon_size,
     zoom_offset: parsed.zoom_offset ?? DEFAULTS.zoom_offset,
     theme_mode: parsed.theme_mode ?? DEFAULTS.theme_mode,
+    motion: parsed.motion ?? DEFAULTS.motion,
     units: { ...DEFAULT_UNITS, ...parsed.units },
   };
   if (parsed.title !== undefined) resolved.title = parsed.title;

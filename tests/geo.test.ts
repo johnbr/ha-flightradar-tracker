@@ -17,6 +17,7 @@ import {
   bearingDeg,
   padForZoomOffset,
   parseBounds,
+  projectKm,
   routeProgress,
   travelHeading,
 } from "../src/geo.ts";
@@ -257,4 +258,35 @@ test("the floor is far below one tick of the slowest real traffic", () => {
   // A Cessna in the circuit at 65 kt covers ~2 km between ticks, so the floor
   // only ever rejects aircraft that are not really moving.
   assert.ok(haversineKm([34, -117], [34.018, -117]) > 0.15 * 10);
+});
+
+test("projectKm is the inverse of the distance and bearing it was given", () => {
+  // The one property that matters: an aircraft carried n km on bearing b has to
+  // end up n km away on bearing b. Getting the longitude scaling wrong is the
+  // classic failure and it stays plausible on screen -- the aircraft simply
+  // drifts, faster the further north it is.
+  const from: [number, number] = [34.0771, -117.6562];
+  for (const bearing of [0, 45, 90, 179, 270, 359]) {
+    for (const km of [0.5, 12.35, 40]) {
+      const to = projectKm(from, bearing, km);
+      assert.ok(Math.abs(haversineKm(from, to) - km) < 1e-6, `distance at ${bearing} deg / ${km} km`);
+      const back = bearingDeg(from, to);
+      const off = Math.abs(((back - bearing + 540) % 360) - 180);
+      assert.ok(off < 0.01, `bearing at ${bearing} deg / ${km} km was ${back}`);
+    }
+  }
+});
+
+test("projectKm leaves a stationary aircraft exactly where it is", () => {
+  const from: [number, number] = [34.0771, -117.6562];
+  assert.deepEqual(projectKm(from, 123, 0), from);
+});
+
+test("projectKm crossing the antimeridian stays a real longitude", () => {
+  // 400 kt for two minutes -- the prediction horizon -- from just west of the
+  // line. Wrapping to 180.4 would put the marker off the map rather than on the
+  // other side of it.
+  const to = projectKm([51.5, 179.8], 90, 25);
+  assert.ok(to[1] >= -180 && to[1] <= 180, `longitude was ${to[1]}`);
+  assert.ok(to[1] < 0, "should have wrapped into the western hemisphere");
 });

@@ -16,7 +16,7 @@
 
 import { LitElement, css, html, nothing, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
-import { DEFAULTS, EDITOR_TYPE, THEME_MODES, type ParsedConfig } from "./config";
+import { DEFAULTS, EDITOR_TYPE, MOTION_MODES, THEME_MODES, type ParsedConfig } from "./config";
 import type { HomeAssistant } from "./types";
 
 const LABELS: Record<string, string> = {
@@ -26,6 +26,7 @@ const LABELS: Record<string, string> = {
   zoom: "Fixed zoom (overrides the area fit)",
   zoom_offset: "Zoom in beyond the area fit (levels)",
   theme_mode: "Map theme",
+  motion: "Motion between fixes",
   icon_size: "Aircraft icon size",
   show_tracks: "Show tracks",
   show_airports: "Show airports",
@@ -62,6 +63,10 @@ const SCHEMA = [
       {
         name: "icon_size",
         selector: { number: { min: 12, max: 72, step: 1, mode: "box", unit_of_measurement: "px" } },
+      },
+      {
+        name: "motion",
+        selector: { select: { mode: "dropdown", options: [...MOTION_MODES] } },
       },
     ],
   },

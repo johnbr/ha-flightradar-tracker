@@ -36,10 +36,11 @@ Three deliberate choices:
 - **A map you can actually use.** Pan, pinch and zoom freely; the card fits the watched area
   once on load and never again, so a data tick can't snap the view back under you. A recentre
   control is the way back.
-- **Aircraft that move rather than blink.** Markers are keyed on the flight id and patched in
-  place — added, moved, turned, removed — and each one *glides* to its new fix instead of
-  teleporting. Every position drawn is on the line between two real fixes; nothing is
-  extrapolated.
+- **Aircraft that keep moving.** Markers are keyed on the flight id and patched in place —
+  added, moved, turned, removed — and each one is flown continuously between fixes rather
+  than teleporting to each new one. The feed's period here is 23–72 seconds and it *grows
+  with the traffic*, so this is not cosmetic: see [Motion](#motion) for what that does to a
+  card that only ever draws between two real fixes, and the measurements behind the default.
 - **Rotated, per-kind icons.** Aircraft point where they are going. Helicopters get their own
   top-down symbol, and anything on the ground is dimmed.
 - **Tracks.** Each aircraft's recent trail, from the sensor's own `coordinates` array.
@@ -91,6 +92,7 @@ title: Flights overhead
 | `zoom` | number | — | Fixes the zoom (1–20) instead of fitting the watched area. The map still centres on the area |
 | `zoom_offset` | number | `1` | Whole zoom levels to tighten the area fit by (−2–3). **A positive value crops the area** — see below. Ignored when `zoom` is set |
 | `theme_mode` | string | `auto` | Basemap theme: `auto` (follow the dashboard), `light`, `dark` |
+| `motion` | string | `predicted` | How the aircraft move between fixes: `predicted`, `glide`, `none` — see below |
 | `show_airports` | bool | `true` | Draw the airports the overhead traffic is flying between — see below |
 | `icon_size` | number | `28` | Aircraft icon box in px (12–72) |
 
@@ -126,10 +128,62 @@ Three silhouettes, all rotated to the direction of travel:
 reads `"Airplane"` for a Cessna 152 and an A321 alike, and is only useful for
 pulling helicopters out.
 
-Markers point along the segment they are visibly travelling, not along the
-feed's reported `heading`. The two agree in cruise and diverge in a turn, where
-the reported heading has already swung to its new value while the segment being
-drawn is still the old one — which reads as an aircraft flying sideways.
+Markers point the way they are being **moved**, which is not always the same
+thing as the feed's reported `heading`. Under `motion: glide` the marker slides
+along the segment between two fixes, so that segment's bearing is what it points
+along — the two agree in cruise and diverge in a turn, where the reported
+heading has already swung to its new value while the segment being drawn is
+still the old one, and pointing along it reads as an aircraft flying sideways.
+Under `motion: predicted` the marker is carried along the reported heading, so
+that is what it points along instead.
+
+### Motion
+
+The Flightradar24 integration does not deliver fixes on a clock. Its period is
+the coordinator's cycle **duration** plus its `scan_interval`, and it fetches
+each aircraft's details serially inside the area loop — so the period grows with
+the number of aircraft overhead. Measured live over ten minutes with
+`scan_interval: 10`:
+
+```
+gap between ticks, s:  29.5 60.5 72.0 57.4 50.6 37.9 29.5 36.8 29.1 23.7 25.3 22.7 24.8 29.5 23.7 31.2
+aircraft overhead:       11   13   14   16   14   13   10    9   10   10    9   10   10   10   10    9
+```
+
+Not one gap came near `scan_interval`. Lowering it cannot help, and only adds
+load to an endpoint that answers 429 readily.
+
+That is what makes the mode worth choosing deliberately:
+
+| `motion` | What it draws | Cost |
+|---|---|---|
+| `predicted` *(default)* | Each aircraft carried forward from its last fix along its reported heading at its reported ground speed, with the next fix faded in over roughly one period instead of snapped to | The drawn position is a projection, not a measurement |
+| `glide` | Slides along the line between the last two real fixes. Nothing extrapolated | Draws a whole tick late, and **stalls** whenever the period grows — which it does, with traffic |
+| `none` | Jumps to each new fix | Honest and still. What `prefers-reduced-motion` forces regardless |
+
+**`predicted` is the default because it is measurably the more accurate one
+here, not merely the smoother one.** Replaying that same window: drawing the
+last fix — what `glide` converges on — left the marker a median **1.75 km** from
+where the aircraft actually was (p90 5.74, max 10.36, n=125), and left it
+completely frozen for 12 % of wall time overall, 18 % over the busy half, in
+stalls of 10–20 seconds each. Projecting the fix forward instead landed a median
+**0.70 km** out (p90 2.68, max 5.42) — and that is measured at the *worst*
+instant, just before the next fix lands.
+
+Two details that follow from the measurements rather than from taste:
+
+- The velocity is the reported `heading` + `ground_speed`, **not** the observed
+  vector between the last two fixes. The observed vector is a chord averaged
+  over the whole gap, so for anything turning it is stale on arrival: median
+  1.16 km against 0.70.
+- Prediction stops after two minutes. Past that the feed has genuinely stalled,
+  and a jet carried on for two minutes has already been moved 25 km — further
+  than the watched area is wide. Freezing is the honest thing to draw.
+
+An aircraft on the ground is never predicted: a parked aircraft's reported
+heading is whichever way it happened to stop. Tracks are history and still end
+at the last real fix, so a predicted marker runs slightly ahead of its own
+trail.
 
 ### About `zoom_offset`
 

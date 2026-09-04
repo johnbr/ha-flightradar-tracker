@@ -85,6 +85,36 @@ export function haversineKm(from: LatLon, to: LatLon): number {
   return 2 * EARTH_KM * Math.asin(Math.min(1, Math.sqrt(a)));
 }
 
+/**
+ * Walk `km` along a great circle from `from`, on the initial bearing `bearing`.
+ *
+ * The inverse of `bearingDeg` + `haversineKm`, and the one piece of geodesy the
+ * predicted-motion path needs: where an aircraft holding its current ground
+ * track will be in n seconds.
+ *
+ * Spherical rather than ellipsoidal, like everything else here. Over the
+ * distances involved -- an aircraft covers at most ~10 km between fixes in this
+ * area -- the difference from WGS-84 is a couple of metres, well under a pixel
+ * at any zoom this card is used at, and far under the prediction error the
+ * caller is already accepting.
+ */
+export function projectKm(from: LatLon, bearing: number, km: number): LatLon {
+  if (km === 0) return from;
+  const d = km / EARTH_KM;
+  const brg = bearing * RAD;
+  const lat1 = from[0] * RAD;
+  const lon1 = from[1] * RAD;
+  const sinLat1 = Math.sin(lat1);
+  const cosLat1 = Math.cos(lat1);
+  const sinD = Math.sin(d);
+  const cosD = Math.cos(d);
+  const lat2 = Math.asin(sinLat1 * cosD + cosLat1 * sinD * Math.cos(brg));
+  const lon2 = lon1 + Math.atan2(Math.sin(brg) * sinD * cosLat1, cosD - sinLat1 * Math.sin(lat2));
+  // Normalise the longitude so a projection across the antimeridian stays a
+  // real coordinate rather than 181 degrees east.
+  return [lat2 / RAD, (((lon2 / RAD + 540) % 360) - 180)];
+}
+
 export interface RouteProgress {
   flownKm: number;
   remainingKm: number;
