@@ -49,6 +49,18 @@
  *    once the engine is up and the `_loaded` re-fit is unchanged, and
  *    `disconnectedCallback()` now calls `_engine.destroy()`, which removes the
  *    Leaflet map exactly as before.
+ *
+ * 6. **The binding is not enough on its own.** On the Pixel Tablet's Companion
+ *    WebView (Chrome 153, HA 2026.10.1) a probe found the card's `ha-map` with
+ *    `_forceLeaflet === false` and a MapLibre engine: the header counted the
+ *    aircraft, the vector basemap drew, and not one marker did -- while every
+ *    headless Chromium run of the same page had the flag set. `_forceLeaflet`
+ *    is a plain constructor-initialised field, not a reactive property, so a
+ *    value that lands before the element upgrades is overwritten by the
+ *    constructor; that is the likeliest cause, unconfirmed. Whatever the cause,
+ *    `whenMapReady()` now notices a MapLibre engine and calls ha-map's own
+ *    `_handleEngineFatal()`, which sets the flag, destroys the engine and
+ *    reloads on Leaflet -- the path ha-map itself takes when WebGL dies.
  */
 
 /** The Leaflet surface this card uses. Grows as the milestones need more. */
@@ -122,6 +134,11 @@ export interface HaMapElement extends HTMLElement {
   /** 2026.10+: the engine, and the switch that makes it a Leaflet one. */
   _engine?: MapEngineLike;
   _forceLeaflet?: boolean;
+  /**
+   * 2026.10+: ha-map's own MapLibre-failed path -- sets `_forceLeaflet`,
+   * destroys the engine and reloads on Leaflet. A no-op once the flag is set.
+   */
+  _handleEngineFatal?: () => void;
   /** Its own "Leaflet is up" flag. See fact 3. */
   _loaded?: boolean;
   layers?: LeafletLayer[];
@@ -200,8 +217,18 @@ export function leafletMapOf(el: HaMapElement): LeafletMap | undefined {
  * an endless "Loading…".
  */
 export async function whenMapReady(el: HaMapElement): Promise<LeafletLike | undefined> {
-  const deadline = Date.now() + READY_TIMEOUT_MS;
+  let deadline = Date.now() + READY_TIMEOUT_MS;
   while ((!leafletOf(el) || !el._loaded) && Date.now() < deadline) {
+    if (el._loaded && el._engine && !leafletOf(el) && !el._forceLeaflet) {
+      // Fact 6: the `_forceLeaflet` binding was lost and MapLibre came up.
+      // Hand it to ha-map's own fallback, which reloads on Leaflet, and give
+      // that reload a fresh timeout. Called BEFORE touching the flag -- the
+      // method is a no-op once it is set.
+      console.warn("flight-map-card: ha-map came up on MapLibre; switching it to Leaflet");
+      if (el._handleEngineFatal) el._handleEngineFatal();
+      else el._forceLeaflet = true;
+      deadline = Date.now() + READY_TIMEOUT_MS;
+    }
     await new Promise((resolve) => setTimeout(resolve, READY_POLL_MS));
   }
   // A MapLibre engine (fact 5) comes up `_loaded` with no Leaflet: undefined.
