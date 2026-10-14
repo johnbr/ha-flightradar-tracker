@@ -38,6 +38,8 @@ import {
 } from "./geo";
 import {
   ensureHaMap,
+  leafletMapOf,
+  leafletOf,
   whenMapReady,
   type HaMapElement,
   type LeafletLayerGroup,
@@ -479,7 +481,7 @@ export class FlightMapCard extends LitElement {
     this._syncing = true;
     try {
       const leaflet = await whenMapReady(el);
-      const map = el.leafletMap;
+      const map = leafletMapOf(el);
       if (!leaflet || !map) return;
 
       if (map !== this._mapInstance) {
@@ -805,7 +807,8 @@ export class FlightMapCard extends LitElement {
 
   /** Move the selected look from one aircraft to another. */
   private _paintSelection(previous?: string): void {
-    const leaflet = this._mapEl()?.Leaflet;
+    const el = this._mapEl();
+    const leaflet = el ? leafletOf(el) : undefined;
     if (!leaflet) return;
     const style = this._iconStyle();
 
@@ -1013,7 +1016,7 @@ export class FlightMapCard extends LitElement {
     // Leaflet caches its container size and only re-reads it when told to, so a
     // frame that has just been laid out would otherwise be fitted at the size
     // it had before.
-    el.leafletMap?.invalidateSize(false);
+    leafletMapOf(el)?.invalidateSize(false);
     // A positive offset tightens the fit by whole zoom levels; see
     // padForZoomOffset for why this is padding rather than a zoom assignment.
     const offset = this._config?.zoom_offset ?? DEFAULTS.zoom_offset;
@@ -1042,9 +1045,11 @@ export class FlightMapCard extends LitElement {
         Map unavailable — Home Assistant's map component did not load.
       </div>`;
     }
+    // `_forceLeaflet`: 2026.10's ha-map defaults to MapLibre, and every layer
+    // this card draws is a Leaflet one -- see fact 5 in ha-map.ts.
     return html`
       <div class="map-wrap" style=${frame}>
-        <ha-map .autoFit=${false} .themeMode=${this._config?.theme_mode ?? DEFAULTS.theme_mode}></ha-map>
+        <ha-map ._forceLeaflet=${true} .autoFit=${false} .themeMode=${this._config?.theme_mode ?? DEFAULTS.theme_mode}></ha-map>
         <button class="recentre" title="Recentre on the watched area" @click=${this._onRecentre}>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d=${RECENTRE_PATH}></path></svg>
         </button>
