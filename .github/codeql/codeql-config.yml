@@ -1,0 +1,8 @@
+name: ha-flightradar-tracker CodeQL config
+
+# The committed bundle is rollup + terser output built from src/, with lit
+# and the other dependencies bundled in. CodeQL already scans the
+# TypeScript it is built from; findings in minified third-party code
+# aren't actionable.
+paths-ignore:
+  - dist/**
