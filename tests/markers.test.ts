@@ -1,33 +1,16 @@
 /**
- * Marker icon markup.
+ * Marker markup.
  *
- * `aircraftIcon` only ever calls `divIcon`, so a stub Leaflet is enough to
- * assert the markup a browser would get -- which is worth pinning, because the
- * two things most likely to break here are silent: a rotation that never
- * applies, and the default `leaflet-div-icon` class drawing a white box behind
- * every aircraft.
+ * The card hands this markup to `ha-map`'s `addMarker` inside an element of
+ * its own, so asserting the string is asserting what a browser gets -- worth
+ * pinning, because the things most likely to break here are silent: a rotation
+ * that never applies, a box that is not the size the engine was told, and an
+ * airport anchored somewhere other than its field.
  */
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { aircraftIcon, type AircraftShape } from "../src/markers.ts";
-import type { LeafletLike } from "../src/ha-map.ts";
-
-interface Captured {
-  className?: string;
-  iconSize?: [number, number];
-  iconAnchor?: [number, number];
-  html?: string;
-}
-
-let captured: Captured = {};
-
-const leaflet = {
-  divIcon(options: Record<string, unknown>) {
-    captured = options as Captured;
-    return {};
-  },
-} as unknown as LeafletLike;
+import { aircraftIconHtml, airportIcon, type AircraftShape } from "../src/markers.ts";
 
 const STYLE = { size: 28, color: "#111", outline: "#fff", groundColor: "#888", selectedColor: "#0af" };
 
@@ -40,21 +23,28 @@ const shape = (over: Partial<AircraftShape> = {}): AircraftShape => ({
 });
 
 function iconHtml(over: Partial<AircraftShape> = {}): string {
-  aircraftIcon(leaflet, shape(over), STYLE);
-  return captured.html ?? "";
+  return aircraftIconHtml(shape(over), STYLE);
 }
 
-test("the icon is sized and anchored on its own centre", () => {
-  aircraftIcon(leaflet, shape(), STYLE);
-  assert.deepEqual(captured.iconSize, [28, 28]);
-  // Anchored centre, not bottom-tip: an aircraft marker points AT its position.
-  assert.deepEqual(captured.iconAnchor, [14, 14]);
+test("the icon box is the configured size", () => {
+  // The engine centres the element on the position, so the box must be the
+  // size it was told -- otherwise the aircraft sits off its own fix.
+  assert.match(iconHtml(), /^<div style="width:28px;height:28px;/);
 });
 
-test("the default leaflet-div-icon class is replaced", () => {
-  // Leaflet's default class paints a white box behind the icon.
-  aircraftIcon(leaflet, shape(), STYLE);
-  assert.equal(captured.className, "fmc-aircraft");
+const AIRPORT_STYLE = { color: "#555", outline: "#fff", labelColor: "#333" };
+
+test("an airport is anchored on its plate, with the label hanging below", () => {
+  const markup = airportIcon("KCNO", AIRPORT_STYLE);
+  assert.deepEqual(markup.size, [46, 32]);
+  // Plate centre on the coordinate, so the label never covers the field.
+  assert.deepEqual(markup.anchor, [23, 9]);
+  assert.match(markup.html, />KCNO<\/span>/);
+});
+
+test("an airport code cannot break out of the markup", () => {
+  const markup = airportIcon('<b>"x', AIRPORT_STYLE);
+  assert.doesNotMatch(markup.html, /<b>/);
 });
 
 test("heading becomes a rotation", () => {
@@ -105,8 +95,8 @@ test("theme colours cannot break out of the markup", () => {
   // Colours come from getComputedStyle, so they are not user input -- but they
   // are interpolated into attributes, and a quote would silently mangle the
   // whole icon rather than fail loudly.
-  aircraftIcon(leaflet, shape(), { ...STYLE, color: '"><script>x</script>' });
-  assert.doesNotMatch(captured.html ?? "", /<script>/);
+  const html = aircraftIconHtml(shape(), { ...STYLE, color: '"><script>x</script>' });
+  assert.doesNotMatch(html, /<script>/);
 });
 
 test("a light aircraft and a jet draw different shapes", () => {

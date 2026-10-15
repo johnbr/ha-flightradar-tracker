@@ -8,7 +8,8 @@
     "build": "rollup -c",
     "watch": "rollup -c -w",
     "typecheck": "tsc --noEmit",
-    "test:js": "TZ=UTC node --test tests/*.test.ts"
+    "test:js": "TZ=UTC node --test tests/*.test.ts",
+    "build:probe": "rollup -c rollup.probe.mjs"
   },
   "keywords": [
     "home-assistant",

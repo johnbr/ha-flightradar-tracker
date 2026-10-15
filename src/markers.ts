@@ -1,26 +1,22 @@
 /**
- * Aircraft markers.
+ * Marker markup: the HTML that goes inside the elements the card hands to
+ * `ha-map`'s `addMarker` (see engine.ts).
  *
- * Two things force `L.divIcon` here rather than anything simpler:
+ * Two things force hand-built markup rather than anything simpler:
  *
  * - **Rotation.** A marker has to point where the aircraft is pointing, and
  *   rotation is unreachable through `ha-map.paths` or through a plain image
  *   icon. A div wrapping an inline SVG, with `transform: rotate()`, is the
  *   working shape -- the same one the integration's own bundled card uses.
- * - **Styling.** The Leaflet map lives inside `ha-map`'s shadow root, so a CSS
- *   class defined in this card's own styles never reaches it. Everything here
+ * - **Styling.** The markers live inside `ha-map`'s shadow root, so a CSS
+ *   class defined in this card's own styles never reaches them. Everything here
  *   is therefore inline, and the colours are passed in already resolved.
- *
- * The default `leaflet-div-icon` class draws a white box behind the icon, so
- * `className` is set to replace it.
  *
  * This module takes a plain shape rather than a `Flight` so that it imports
  * nothing at runtime and `node --test` can type-strip it: Node's ESM resolver
  * wants an explicit extension on a real import, which neither rollup nor tsc
  * needs. Same rule as the other pure modules here.
  */
-
-import type { LeafletDivIcon, LeafletLike } from "./ha-map";
 
 /** mdi:airplane. Nose points north at rotation 0, which is what heading means. */
 const PLANE_PATH =
@@ -120,13 +116,13 @@ function helicopterSvg(style: AircraftIconStyle, fill: string): string {
 }
 
 /**
- * The icon for one aircraft.
+ * The markup for one aircraft: a `style.size` square box, centre-anchored --
+ * an aircraft marker points AT its position, so its centre is the fix.
  *
- * Rebuilt only when `markerKey()` changes -- see flights.ts. Calling
- * `setIcon` replaces the marker's DOM node, so doing it on every tick is what
- * makes a field of aircraft blink.
+ * Rebuilt only when `markerKey()` changes -- see flights.ts. The element it
+ * goes into is kept, so a restyle costs one innerHTML write and nothing blinks.
  */
-export function aircraftIcon(leaflet: LeafletLike, shape: AircraftShape, style: AircraftIconStyle): LeafletDivIcon {
+export function aircraftIconHtml(shape: AircraftShape, style: AircraftIconStyle): string {
   const heading = shape.heading === null ? 0 : Math.round(shape.heading);
   const grounded = shape.grounded;
   const fill = shape.selected ? style.selectedColor : grounded ? style.groundColor : style.color;
@@ -142,19 +138,13 @@ export function aircraftIcon(leaflet: LeafletLike, shape: AircraftShape, style: 
     ? `<circle cx="12" cy="12" r="11" fill="${safe(style.selectedColor)}" opacity="0.25"></circle>`
     : "";
   const inner = halo + body;
-  const anchor = style.size / 2;
 
-  return leaflet.divIcon({
-    // Replaces `leaflet-div-icon`, whose white box would frame every aircraft.
-    className: "fmc-aircraft",
-    iconSize: [style.size, style.size],
-    iconAnchor: [anchor, anchor],
-    html:
-      `<div style="width:${style.size}px;height:${style.size}px;transform:rotate(${heading}deg);` +
-      `transform-origin:50% 50%;${grounded ? "opacity:0.55;" : ""}">` +
-      `<svg viewBox="0 0 ${VIEWBOX} ${VIEWBOX}" style="width:100%;height:100%;display:block" ` +
-      `xmlns="http://www.w3.org/2000/svg" aria-hidden="true">${inner}</svg></div>`,
-  });
+  return (
+    `<div style="width:${style.size}px;height:${style.size}px;transform:rotate(${heading}deg);` +
+    `transform-origin:50% 50%;${grounded ? "opacity:0.55;" : ""}">` +
+    `<svg viewBox="0 0 ${VIEWBOX} ${VIEWBOX}" style="width:100%;height:100%;display:block" ` +
+    `xmlns="http://www.w3.org/2000/svg" aria-hidden="true">${inner}</svg></div>`
+  );
 }
 
 export interface AirportIconStyle {
@@ -178,17 +168,24 @@ export interface AirportIconStyle {
  * The anchor puts the plate's centre on the coordinate and lets the label hang
  * below it, so a label never covers the field it names.
  */
-export function airportIcon(leaflet: LeafletLike, code: string, style: AirportIconStyle): LeafletDivIcon {
+export interface MarkerMarkup {
+  html: string;
+  /** Pixel box. */
+  size: [number, number];
+  /** Pixel offset of the coordinate from the box's top-left. */
+  anchor: [number, number];
+}
+
+export function airportIcon(code: string, style: AirportIconStyle): MarkerMarkup {
   const body = safe(style.color);
   const line = safe(style.outline);
   const label = safe(style.labelColor);
   const text = code.replace(/[^A-Za-z0-9]/g, "").slice(0, 4);
   const plate = 18;
   const width = 46;
-  return leaflet.divIcon({
-    className: "fmc-airport",
-    iconSize: [width, plate + 14],
-    iconAnchor: [width / 2, plate / 2],
+  return {
+    size: [width, plate + 14],
+    anchor: [width / 2, plate / 2],
     html:
       `<div style="width:${width}px;display:flex;flex-direction:column;align-items:center;">` +
       `<svg width="${plate}" height="${plate}" viewBox="0 0 24 24" style="display:block" ` +
@@ -201,5 +198,5 @@ export function airportIcon(leaflet: LeafletLike, code: string, style: AirportIc
       `<span style="margin-top:1px;font-size:10px;font-weight:600;letter-spacing:0.3px;` +
       `line-height:1;color:${label};text-shadow:0 0 3px ${line},0 0 3px ${line};` +
       `white-space:nowrap;">${text}</span></div>`,
-  });
+  };
 }

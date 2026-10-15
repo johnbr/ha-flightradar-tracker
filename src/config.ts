@@ -222,8 +222,8 @@ export function parseConfig(raw: unknown): ParsedConfig {
     if ((value as number) < min || (value as number) > max) {
       fail(`\`${key}\` must be between ${min} and ${max}, got ${value as number}`);
     }
-    // Only whole levels for the offset. Leaflet snaps the fit to an integer
-    // zoom, so a fractional offset would land on one level or the next
+    // Only whole levels for the offset. ha-map's Leaflet fallback snaps the fit
+    // to an integer zoom, so a fractional offset would land on one level or the next
     // depending on the viewport -- silently not what was asked for, which is
     // the whole failure mode this parser exists to prevent.
     if (key === "zoom_offset" && !Number.isInteger(value)) {

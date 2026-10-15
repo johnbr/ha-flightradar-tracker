@@ -123,9 +123,9 @@ export function aircraftKind(flight: Flight): AircraftKind {
 /**
  * Everything about a flight that changes how its marker LOOKS, as one string.
  *
- * Comparing this is what keeps `setIcon` -- which rebuilds the marker's DOM --
- * off the hot path: an aircraft that only moved gets a `setLatLng` and nothing
- * else. Heading is rounded because it arrives as whole degrees and a rebuild
+ * Comparing this is what keeps a repaint -- which rewrites the marker's
+ * markup -- off the hot path: an aircraft that only moved gets a move and
+ * nothing else. Heading is rounded because it arrives as whole degrees and a rebuild
  * for a tenth of one would be waste.
  */
 export function markerKey(flight: Flight): string {
@@ -215,11 +215,11 @@ export function indexById(flights: readonly Flight[]): Map<string, Flight> {
 
 export interface FlightChange {
   flight: Flight;
-  /** Its position moved: the marker needs `setLatLng`. */
+  /** Its position moved: the marker needs moving. */
   moved: boolean;
-  /** Its appearance changed: the marker needs `setIcon`. */
+  /** Its appearance changed: the marker needs repainting. */
   restyled: boolean;
-  /** Its track grew or shifted: the polyline needs `setLatLngs`. */
+  /** Its track grew or shifted: the track path needs updating. */
   retracked: boolean;
 }
 

@@ -18,40 +18,12 @@ import {
   type MotionMode,
   type ResolvedConfig,
 } from "./config";
-import {
-  aircraftKind,
-  collectAirports,
-  diffFlights,
-  flightLabel,
-  indexById,
-  isOnGround,
-  parseFlights,
-} from "./flights";
-import {
-  boundsCenter,
-  boundsCorners,
-  padForZoomOffset,
-  parseBounds,
-  projectKm,
-  travelHeading,
-  type AreaBounds,
-} from "./geo";
-import {
-  ensureHaMap,
-  leafletMapOf,
-  leafletOf,
-  whenMapReady,
-  type HaMapElement,
-  type LeafletLayerGroup,
-  type LeafletLike,
-  type LeafletMap,
-  type LeafletMarker,
-  type LeafletPathLayer,
-  type LeafletPolyline,
-} from "./ha-map";
+import { collectAirports, indexById, parseFlights } from "./flights";
+import { boundsCenter, boundsCorners, padForZoomOffset, parseBounds, travelHeading, type AreaBounds } from "./geo";
+import { ensureHaMap, whenEngineReady, type HaMapElement } from "./ha-map";
 import { renderDetail, renderEmptyDetail } from "./detail";
-import { MotionTracker, type MotionFix } from "./motion";
-import { aircraftIcon, airportIcon, type AircraftIconStyle, type AircraftShape } from "./markers";
+import { MapLayer } from "./map-layer";
+import type { AircraftIconStyle } from "./markers";
 import { cardStyles } from "./styles";
 import type { Flight, HassEntity, HomeAssistant } from "./types";
 
@@ -79,16 +51,6 @@ const DOCS = "https://github.com/johnbr/ha-flightradar-tracker";
 const FIT_PAD = 0.05;
 
 /**
- * Track line weight and opacity. Deliberately faint: eleven 50-point trails is
- * the normal case here, and they are context for the aircraft, not the subject.
- */
-const TRACK_WEIGHT = 2;
-const TRACK_OPACITY = 0.45;
-/** The selected aircraft's own trail, raised above the rest. */
-const SELECTED_TRACK_WEIGHT = 3;
-const SELECTED_TRACK_OPACITY = 0.9;
-
-/**
  * Bounds on the glide between two fixes -- `motion: glide` only.
  *
  * The tween runs for however long the last gap between ticks was, so the
@@ -114,63 +76,28 @@ const SELECTED_TRACK_OPACITY = 0.9;
 const GLIDE_MIN_MS = 1000;
 const GLIDE_MAX_MS = 120_000;
 
-/**
- * How often a predicted aircraft is re-aimed.
- *
- * Deliberately a whole second rather than an animation frame. Each step arms a
- * CSS transition of exactly one step and aims at where the aircraft WILL be one
- * step from now, so the browser does the in-between drawing on the compositor
- * at display rate -- the JS only has to hand it a new target once a second. A
- * requestAnimationFrame loop would write sixty times as many styles per marker
- * to produce the same picture, on a dashboard that already logs websocket
- * backpressure.
- *
- * It also means a late step degrades into a slightly longer straight segment
- * rather than into a stall.
- */
-const MOTION_STEP_MS = 1000;
-
 /** mdi:crosshairs-gps */
 const RECENTRE_PATH =
   "M12,8A4,4 0 0,1 16,12A4,4 0 0,1 12,16A4,4 0 0,1 8,12A4,4 0 0,1 12,8M3.05,13H1V11H3.05C3.5,6.83 6.83,3.5 " +
   "11,3.05V1H13V3.05C17.17,3.5 20.5,6.83 20.95,11H23V13H20.95C20.5,17.17 17.17,20.5 13,20.95V23H11V20.95C6.83," +
   "20.5 3.5,17.17 3.05,13M12,5A7,7 0 0,0 5,12A7,7 0 0,0 12,19A7,7 0 0,0 19,12A7,7 0 0,0 12,5Z";
 
-/** markers.ts stays runtime-import-free, so the card adapts the flight for it. */
-function shapeOf(flight: Flight, selected: boolean): AircraftShape {
-  return {
-    // The way the marker is being MOVED, which is not always the reported
-    // heading -- see `_displayHeading`. Falls back to the reported heading, so
-    // this is never worse than the raw value.
-    heading: flight.heading_display ?? flight.heading,
-    kind: aircraftKind(flight),
-    grounded: isOnGround(flight),
-    selected,
-  };
-}
-
-/** motion.ts stays runtime-import-free, so the card adapts the flight for it. */
-function fixOf(flight: Flight, at: number): MotionFix {
-  return {
-    lat: flight.latitude,
-    lon: flight.longitude,
-    speed: flight.ground_speed,
-    heading: flight.heading,
-    grounded: isOnGround(flight),
-    at,
-  };
-}
-
 /**
- * How long after a zoom starts to leave the markers alone.
+ * How long after a zoom starts to leave the markers alone -- Leaflet engine
+ * only.
  *
- * Leaflet rewrites every marker transform as a zoom settles; a motion step
- * landing in that window would race it. `zoomend` clears the guard, and this is
- * only the backstop for a zoom that somehow never ends -- expiring on its own
- * means a missed event costs a second of stillness, not a permanently frozen
- * map.
+ * Leaflet animates a zoom by scaling the marker pane and re-placing every
+ * marker as it settles; a `setLatLng` landing mid-animation is positioned for
+ * the zoom it is leaving and jumps. `zoomend` clears the guard, and this is only
+ * the backstop for a zoom that somehow never ends -- expiring on its own means
+ * a missed event costs a moment of stillness, not a permanently frozen map.
+ * MapLibre re-places markers from their stored position on every frame, so it
+ * needs no guard.
  */
 const ZOOM_GUARD_MS = 2000;
+
+/** How often to check that `ha-map` has not swapped its engine under us. */
+const ENGINE_WATCH_MS = 2000;
 
 /**
  * Minimum movement between two fixes before the segment is trusted to say
@@ -222,7 +149,7 @@ export class FlightMapCard extends LitElement {
    * change of every entity -- many times a second on a busy instance -- and
    * re-rendering on all of them is what made the air-quality card collapse its
    * own height and destroy the browser's scroll anchor. Here it would also tear
-   * the Leaflet map down. Only a change to this string triggers an update.
+   * the map down. Only a change to this string triggers an update.
    */
   private _signature = "";
 
@@ -236,58 +163,26 @@ export class FlightMapCard extends LitElement {
   private _hass?: HomeAssistant;
 
   /**
-   * The Leaflet instance our layers are attached to. `ha-map` destroys and
-   * rebuilds its map across a disconnect, so this -- not the element -- is what
-   * says whether our layers are still alive.
+   * Everything drawn on the map, bound to ONE engine instance. `ha-map`
+   * destroys its engine on disconnect and swaps it on a WebGL loss, so the
+   * engine -- not the element -- says whether this is still alive.
    */
-  private _mapInstance?: LeafletMap;
-  /**
-   * Area furniture -- the centre marker. Its own group, added first, so that
-   * the track and aircraft groups the later milestones add land above it: add
-   * order is draw order within Leaflet's overlay pane.
-   */
-  private _baseLayer?: LeafletLayerGroup;
-  /** Aircraft tracks, between the area furniture and the markers. */
-  private _trackLayer?: LeafletLayerGroup;
-  /** Aircraft markers, on top. */
-  private _markerLayer?: LeafletLayerGroup;
-  private _airportLayer?: LeafletLayerGroup;
-  /** Which airports are drawn, so the layer is only rebuilt when the set moves. */
-  private _airportKey = "";
-  private _centreMarker?: LeafletPathLayer;
-  /** One marker per flight id -- the identity that survives a tick. */
-  private _markers = new Map<string, LeafletMarker>();
-  /** One polyline per flight id, for aircraft with a track worth drawing. */
-  private _tracks = new Map<string, LeafletPolyline>();
-  /** What the markers currently show, so the next tick can be diffed. */
+  private _layer?: MapLayer;
+  /** What the last tick showed, for travel headings and the selection pan. */
   private _drawn = new Map<string, Flight>();
   /** Memo of the parsed attribute, keyed on the entity fingerprint. */
   private _parsedFor = "";
   private _parsed: Flight[] = [];
-  /** The area is fitted exactly once per map instance -- never on a data tick. */
-  private _fitted = false;
+  /** The engine the area was fitted on -- fitted once per engine, never per tick. */
+  private _fittedEngine?: unknown;
   private _syncing = false;
   /** A tick that arrived mid-sync, so it is not silently dropped. */
   private _resync = false;
+  private _engineWatch?: number;
 
   /** When the last tick was seen, and how long the gap before it was. */
   private _lastTickAt = 0;
   private _glideMs = GLIDE_MIN_MS;
-  /** Marker elements currently mid-glide, so the transition can be removed. */
-  private _gliding: HTMLElement[] = [];
-  private _glideTimer?: number;
-
-  /** Predicted motion: one fix per aircraft, and the step timer that flies them. */
-  private readonly _motion = new MotionTracker();
-  private _motionTimer?: number;
-  /**
-   * Leaflet rewrites every marker transform when a zoom settles, so a step
-   * landing mid-zoom would race it. Steps are simply skipped while zooming --
-   * the next one is at most a second away.
-   */
-  private _zoomingUntil = 0;
-  /** When the last motion step ran, so a late one can redraw instead of slide. */
-  private _lastStepAt = 0;
 
   set hass(hass: HomeAssistant) {
     this._hass = hass;
@@ -303,7 +198,7 @@ export class FlightMapCard extends LitElement {
       this._glideMs = Math.min(Math.max(now - this._lastTickAt, GLIDE_MIN_MS), GLIDE_MAX_MS);
       // The same measurement sizes how long a prediction correction is spread
       // over: one feed period, so it is absorbed before the next fix lands.
-      this._motion.setGapMs(this._glideMs);
+      this._layer?.setGapMs(this._glideMs);
     }
     this._lastTickAt = now;
 
@@ -359,28 +254,26 @@ export class FlightMapCard extends LitElement {
         this._mapAvailable = ok;
       });
     }
-    // Re-attaching gets a brand new Leaflet instance; _syncMap notices and
-    // rebuilds the layers on it.
+    // A WebGL context loss makes ha-map swap MapLibre for Leaflet in place,
+    // taking every marker with it while the card stays connected and nothing
+    // re-renders. Without this the aircraft would be gone until the next tick.
+    this._engineWatch = window.setInterval(() => {
+      const engine = this._mapEl()?._engine;
+      if (this._layer && engine && engine !== this._layer.engine) void this._syncMap();
+    }, ENGINE_WATCH_MS);
+    // Re-attaching gets a brand new engine; _syncMap notices and rebuilds on it.
     void this._syncMap();
   }
 
   disconnectedCallback(): void {
-    this._endGlide();
-    this._stopMotion();
-    this._motion.clear();
-    // The layers die with the map `ha-map` tears down, so this only drops our
-    // references -- keeping them would leave _syncMap believing it is set up.
-    this._mapInstance = undefined;
-    this._baseLayer = undefined;
-    this._trackLayer = undefined;
-    this._markerLayer = undefined;
-    this._airportLayer = undefined;
-    this._airportKey = "";
-    this._centreMarker = undefined;
-    this._markers.clear();
-    this._tracks.clear();
+    window.clearInterval(this._engineWatch);
+    this._engineWatch = undefined;
+    // The markers die with the engine `ha-map` tears down, so this only drops
+    // our references -- keeping them would leave _syncMap believing it is set up.
+    this._layer?.abandon();
+    this._layer = undefined;
     this._drawn.clear();
-    this._fitted = false;
+    this._fittedEngine = undefined;
     super.disconnectedCallback();
   }
 
@@ -388,19 +281,10 @@ export class FlightMapCard extends LitElement {
     void this._syncMap();
   }
 
-  /** Empty every layer and forget what was drawn, so the next sync rebuilds. */
+  /** Remove everything drawn and forget it, so the next sync rebuilds. */
   private _resetDrawing(): void {
-    this._endGlide();
-    this._stopMotion();
-    this._motion.clear();
-    this._baseLayer?.clearLayers();
-    this._trackLayer?.clearLayers();
-    this._markerLayer?.clearLayers();
-    this._airportLayer?.clearLayers();
-    this._airportKey = "";
-    this._centreMarker = undefined;
-    this._markers.clear();
-    this._tracks.clear();
+    this._layer?.destroy();
+    this._layer = undefined;
     this._drawn.clear();
   }
 
@@ -449,10 +333,11 @@ export class FlightMapCard extends LitElement {
   /**
    * A theme colour as a concrete value.
    *
-   * Leaflet writes its options into SVG *presentation attributes*, which do not
-   * accept `var()` -- passing the variable name through would silently draw
-   * nothing. Resolving it here also means the marker follows a theme switch on
-   * the next redraw rather than freezing at build time.
+   * Neither engine can draw a `var()`: MapLibre's paint properties are parsed
+   * as colours by the GL style, and Leaflet writes its options into SVG
+   * presentation attributes -- passing the variable name through would silently
+   * draw nothing. Resolving it here also means the map follows a theme switch
+   * on the next redraw rather than freezing at build time.
    */
   private _themeColor(name: string, fallback: string): string {
     const value = getComputedStyle(this).getPropertyValue(name).trim();
@@ -460,11 +345,11 @@ export class FlightMapCard extends LitElement {
   }
 
   /**
-   * Bring our own layers up on whichever Leaflet instance is current, then fit
-   * the watched area once.
+   * Bring our layer up on whichever engine is current, then fit the watched
+   * area once per engine.
    *
    * Runs after every render, so it must be cheap once settled: past the first
-   * pass it does one identity comparison and one `setLatLng`.
+   * pass it is one identity comparison and a diff.
    */
   private async _syncMap(): Promise<void> {
     if (this._mapAvailable !== true) return;
@@ -480,53 +365,40 @@ export class FlightMapCard extends LitElement {
 
     this._syncing = true;
     try {
-      const leaflet = await whenMapReady(el);
-      const map = leafletMapOf(el);
-      if (!leaflet || !map) return;
-
-      if (map !== this._mapInstance) {
-        // Add order is draw order in Leaflet's overlay pane: area furniture at
-        // the bottom, aircraft above it.
-        this._mapInstance = map;
-        // Leaflet re-applies every marker's translate3d when a zoom settles.
-        // With a glide still armed, all of them would slide across the screen
-        // into their new pixel positions -- so the transitions come off first.
-        map.on("zoomstart", () => this._suspendForZoom());
-        // `viewreset` covers the other way Leaflet rewrites every marker
-        // transform at once: a pan too big to animate falls back to a full
-        // reset, and selecting an aircraft on the far edge of the map is
-        // exactly that pan. Without this the whole field slides into place
-        // after a tap, which is the jerk predicted motion exists to remove.
-        map.on("viewreset", () => this._suspendForZoom());
-        map.on("zoomend", () => {
-          this._zoomingUntil = 0;
-        });
-        this._baseLayer = leaflet.layerGroup().addTo(map);
-        // Added before the tracks and the aircraft, so airports sit underneath
-        // both: they are the fixed reference, never the subject.
-        this._airportLayer = leaflet.layerGroup().addTo(map);
-        this._trackLayer = leaflet.layerGroup().addTo(map);
-        this._markerLayer = leaflet.layerGroup().addTo(map);
-        this._centreMarker = undefined;
-        // The old layers went down with the old map, so the next diff has to
-        // start from empty or every aircraft would be treated as unchanged and
-        // never re-added.
-        this._markers.clear();
-        this._tracks.clear();
-        this._drawn.clear();
-        this._motion.clear();
-        this._fitted = false;
+      const engine = await whenEngineReady(el);
+      if (!engine) {
+        // A map that came up with no engine is a pre-2026.10 ha-map, which has
+        // none of the drawing API. Say so: the alternative is a basemap with
+        // no aircraft on it and nothing saying why.
+        if (el._loaded) console.error("flight-map-card: this Home Assistant's map has no engine API; the card needs 2026.10 or later");
+        return;
       }
 
-      this._drawAreaCentre(leaflet);
-      this._syncFlights(leaflet);
-      // Started here rather than on connect: it needs the markers, and the
-      // mode can change under it when the config is edited.
-      if (this._motionMode() === "predicted") this._startMotion();
-      else this._stopMotion();
+      if (this._layer?.engine !== engine) {
+        // The old engine, if any, is already destroyed and its markers with
+        // it: forget them rather than remove them.
+        this._layer?.abandon();
+        const layer = new MapLayer(engine, () => el.getView(), (id) => this._select(id));
+        layer.setGapMs(this._glideMs);
+        if (layer.kind === "leaflet") {
+          // See ZOOM_GUARD_MS. `viewreset` is the other way Leaflet re-places
+          // every marker at once: a pan too big to animate -- like selecting an
+          // aircraft on the far edge -- falls back to a full reset.
+          engine.leafletMap?.on("zoomstart", () => layer.pause(ZOOM_GUARD_MS));
+          engine.leafletMap?.on("viewreset", () => layer.pause(ZOOM_GUARD_MS));
+          engine.leafletMap?.on("zoomend", () => layer.resume());
+        }
+        this._layer = layer;
+        // The old markers went down with the old engine, so the next diff has
+        // to start from empty or every aircraft would be treated as unchanged.
+        this._drawn.clear();
+      }
 
-      if (!this._fitted) {
-        this._fitted = true;
+      this._drawAreaCentre();
+      this._syncFlights();
+
+      if (this._fittedEngine !== engine) {
+        this._fittedEngine = engine;
         // `ha-map` fits itself when its own `_loaded` flips, and that branch is
         // not gated on `autoFit` -- with no entities it centres on the home
         // coordinates at zoom 14. Awaiting its update cycle lets that happen
@@ -543,18 +415,10 @@ export class FlightMapCard extends LitElement {
     }
   }
 
-  /**
-   * Patch the aircraft markers in place: add what arrived, move what moved,
-   * restyle what turned, remove what left.
-   *
-   * Never rebuilt wholesale. Clearing the layer each tick is the obvious
-   * implementation and it destroys marker identity -- the field blinks, and
-   * from M4 the selected aircraft loses its highlight every 60 seconds.
-   */
-  private _syncFlights(leaflet: LeafletLike): void {
-    const markerLayer = this._markerLayer;
-    const trackLayer = this._trackLayer;
-    if (!markerLayer || !trackLayer) return;
+  /** Hand one tick to the layer. The diffing and patching happen there. */
+  private _syncFlights(): void {
+    const layer = this._layer;
+    if (!layer) return;
 
     const flights = this._flights();
     const mode = this._motionMode();
@@ -564,130 +428,14 @@ export class FlightMapCard extends LitElement {
     for (const flight of flights) {
       flight.heading_display = this._displayHeading(flight, mode);
     }
-    this._syncAirports(leaflet, flights);
+    this._syncAirports(flights);
+    layer.setMode(mode);
+    layer.sync(flights, this._iconStyle(), this._config?.show_tracks ?? DEFAULTS.show_tracks, this._glideMs);
 
-    const diff = diffFlights(this._drawn, flights);
-    if (!diff.added.length && !diff.changed.length && !diff.removed.length) return;
-
-    const style = this._iconStyle();
-    // One clock reading for the whole batch, so every fix in this tick is
-    // projected from the same instant.
-    const at = Date.now();
-
-    for (const id of diff.removed) {
-      const marker = this._markers.get(id);
-      if (marker) {
-        markerLayer.removeLayer(marker);
-        this._markers.delete(id);
-      }
-      this._motion.forget(id);
-      const track = this._tracks.get(id);
-      if (track) {
-        trackLayer.removeLayer(track);
-        this._tracks.delete(id);
-      }
-      // The selected aircraft left the area. Its detail is now history, and
-      // leaving it on screen would read as live.
-      if (this._selectedId === id) this._selectedId = undefined;
-    }
-
-    for (const flight of diff.added) {
-      const id = flight.id;
-      const marker = leaflet.marker([flight.latitude, flight.longitude], {
-        icon: aircraftIcon(leaflet, shapeOf(flight, id === this._selectedId), style),
-        // Native tooltip: the callsign without a tap, and it costs no DOM.
-        title: flightLabel(flight),
-        keyboard: false,
-      });
-      // Only the id is closed over: the flight object is replaced every tick.
-      marker.on("click", () => this._select(id));
-      marker.addTo(markerLayer);
-      this._markers.set(id, marker);
-      if (mode === "predicted") this._motion.update(id, fixOf(flight, at));
-      this._drawTrack(leaflet, flight, style);
-    }
-
-    for (const { flight, moved, restyled, retracked } of diff.changed) {
-      const marker = this._markers.get(flight.id);
-      if (marker) {
-        // Restyle FIRST: setIcon replaces the icon's element, which would throw
-        // away a transition armed on the old one and land the aircraft at its
-        // new fix instantly, mid-glide.
-        if (restyled)
-          marker.setIcon(aircraftIcon(leaflet, shapeOf(flight, flight.id === this._selectedId), style));
-        // A tick that did not MOVE the aircraft is not a new fix: taking it on
-        // as one would reset the extrapolation clock and snap a predicted
-        // marker back to a position it had already flown past.
-        if (moved) {
-          if (mode === "predicted") {
-            // Where the marker is aimed right now, so the tracker can fade the
-            // correction out from THERE rather than from a recomputed guess.
-            const drawnAt = marker.getLatLng();
-            this._motion.update(flight.id, fixOf(flight, at), drawnAt.lat, drawnAt.lng);
-          } else {
-            if (mode === "glide") this._glide(marker);
-            marker.setLatLng([flight.latitude, flight.longitude]);
-          }
-        }
-      }
-      if (retracked) this._drawTrack(leaflet, flight, style);
-    }
-
-    if (this._gliding.length) {
-      // One timer for the whole batch: they all started together.
-      window.clearTimeout(this._glideTimer);
-      this._glideTimer = window.setTimeout(() => this._endGlide(), this._glideMs + 200);
-    }
-
+    // The selected aircraft left the area. Its detail is now history, and
+    // leaving it on screen would read as live.
+    if (this._selectedId && !flights.some((f) => f.id === this._selectedId)) this._selectedId = undefined;
     this._drawn = indexById(flights);
-  }
-
-  /**
-   * Draw or re-point one aircraft's trail.
-   *
-   * `coordinates` is the only source of a track: `flights` is an unrecorded
-   * attribute upstream, so the recorder holds no history to build one from.
-   *
-   * An existing line is re-pointed rather than replaced -- Leaflet updates the
-   * SVG path in place, where removing and re-adding would make the whole field
-   * of trails flicker once a minute.
-   */
-  private _drawTrack(leaflet: LeafletLike, flight: Flight, style: AircraftIconStyle): void {
-    const layer = this._trackLayer;
-    if (!layer) return;
-    const points = flight.coordinates;
-    const existing = this._tracks.get(flight.id);
-
-    // One point is a dot, not a trail, and reads as a rendering fault.
-    if (points.length < 2 || !this._config?.show_tracks) {
-      if (existing) {
-        layer.removeLayer(existing);
-        this._tracks.delete(flight.id);
-      }
-      return;
-    }
-
-    if (existing) {
-      existing.setLatLngs(points);
-      return;
-    }
-
-    const selected = flight.id === this._selectedId;
-    const line = leaflet.polyline(points, {
-      // A track created while its aircraft is already selected has to be born
-      // selected: _paintSelection only runs when the selection itself changes.
-      ...(selected
-        ? this._selectedTrackStyle(style)
-        : { color: style.color, weight: TRACK_WEIGHT, opacity: TRACK_OPACITY }),
-      lineJoin: "round",
-      lineCap: "round",
-      // The trail is context, not a control: a non-interactive line cannot
-      // swallow a tap meant for an aircraft, or a drag meant to pan the map.
-      interactive: false,
-    });
-    line.addTo(layer);
-    this._tracks.set(flight.id, line);
-    if (selected) line.bringToFront();
   }
 
   /**
@@ -720,31 +468,11 @@ export class FlightMapCard extends LitElement {
     };
   }
 
-  /**
-   * Redraw the airport layer, but only when the SET of airports changes.
-   *
-   * Airports do not move, so there is nothing to glide and nothing to patch --
-   * the whole layer is cheap to rebuild and only does so when a field enters or
-   * leaves the flights' origin/destination set, which at a busy GA field is
-   * almost never.
-   */
-  private _syncAirports(leaflet: LeafletLike, flights: Flight[]): void {
-    const layer = this._airportLayer;
+  /** Draw the airports the flights are using, or none. */
+  private _syncAirports(flights: Flight[]): void {
+    const layer = this._layer;
     if (!layer) return;
-    if (!(this._config?.show_airports ?? DEFAULTS.show_airports)) {
-      if (this._airportKey !== "") {
-        layer.clearLayers();
-        this._airportKey = "";
-      }
-      return;
-    }
-
-    const airports = collectAirports(flights, this._bounds());
-    const key = airports.map((a) => a.code).join(",");
-    if (key === this._airportKey) return;
-    this._airportKey = key;
-
-    layer.clearLayers();
+    const show = this._config?.show_airports ?? DEFAULTS.show_airports;
     const light = this._mapIsLight();
     const style = {
       color: light === null ? this._themeColor("--secondary-text-color", "#5c5c5c") : light ? "#5c5c5c" : "#c9c9c9",
@@ -753,17 +481,7 @@ export class FlightMapCard extends LitElement {
       labelColor:
         light === null ? this._themeColor("--secondary-text-color", "#5c5c5c") : light ? "#3c3c3c" : "#e0e0e0",
     };
-    for (const airport of airports) {
-      leaflet
-        .marker([airport.latitude, airport.longitude], {
-          icon: airportIcon(leaflet, airport.code, style),
-          // Never steals a tap from an aircraft, and never takes the selection.
-          interactive: false,
-          keyboard: false,
-          title: airport.name ?? airport.code,
-        })
-        .addTo(layer);
-    }
+    layer.syncAirports(show ? collectAirports(flights, this._bounds()) : [], style);
   }
 
   /**
@@ -788,78 +506,15 @@ export class FlightMapCard extends LitElement {
     this._selectedId = previous === id ? undefined : id;
     // Repaints both ends in one pass, and copes with either being absent -- so
     // this covers select, switch and deselect without branching three ways.
-    this._paintSelection(previous);
+    this._layer?.select(this._selectedId);
     if (this._selectedId === undefined) return;
 
     // The MARKER's position, not the fix's: under predicted motion the aircraft
     // is drawn ahead of its last fix, and panning to the fix would leave the
     // thing that was just tapped off centre by however far it has flown.
-    const marker = this._markers.get(id);
-    const at = marker?.getLatLng();
     const flight = this._drawn.get(id);
-    const centre: [number, number] | undefined = at
-      ? [at.lat, at.lng]
-      : flight
-        ? [flight.latitude, flight.longitude]
-        : undefined;
-    if (centre) this._mapInstance?.panTo(centre, { animate: true });
-  }
-
-  /** Move the selected look from one aircraft to another. */
-  private _paintSelection(previous?: string): void {
-    const el = this._mapEl();
-    const leaflet = el ? leafletOf(el) : undefined;
-    if (!leaflet) return;
-    const style = this._iconStyle();
-
-    if (previous && previous !== this._selectedId) {
-      const flight = this._drawn.get(previous);
-      const marker = this._markers.get(previous);
-      if (flight && marker) marker.setIcon(aircraftIcon(leaflet, shapeOf(flight, false), style));
-      this._tracks.get(previous)?.setStyle({
-        color: style.color,
-        weight: TRACK_WEIGHT,
-        opacity: TRACK_OPACITY,
-      });
-    }
-
-    const id = this._selectedId;
-    if (!id) return;
-    const flight = this._drawn.get(id);
-    const marker = this._markers.get(id);
-    if (flight && marker) marker.setIcon(aircraftIcon(leaflet, shapeOf(flight, true), style));
-    this._tracks.get(id)?.setStyle(this._selectedTrackStyle(style)).bringToFront();
-  }
-
-  /**
-   * Slide a marker to its new fix instead of teleporting it.
-   *
-   * Leaflet positions a marker with `transform: translate3d(...)` on the icon's
-   * root element, so a transition on that property turns the next `setLatLng`
-   * into a glide. Every position drawn is on the straight line between two REAL
-   * fixes -- the aircraft reads as one tick late, never as somewhere it has not
-   * been, which is the difference between this and dead reckoning.
-   *
-   * The transition is armed per move and removed afterwards, because Leaflet
-   * also rewrites that transform on zoom and pane resets.
-   */
-  private _glide(marker: LeafletMarker): void {
-    // Someone who has asked for less motion gets the jump; it is the honest
-    // rendering anyway.
-    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
-    const element = marker.getElement();
-    if (!element) return;
-    element.style.transition = `transform ${this._glideMs}ms linear`;
-    this._gliding.push(element);
-  }
-
-  private _endGlide(): void {
-    if (this._glideTimer !== undefined) {
-      window.clearTimeout(this._glideTimer);
-      this._glideTimer = undefined;
-    }
-    for (const element of this._gliding) element.style.transition = "";
-    this._gliding = [];
+    const centre = this._layer?.positionOf(id) ?? (flight ? ([flight.latitude, flight.longitude] as [number, number]) : undefined);
+    if (centre) this._mapEl()?.panTo(centre);
   }
 
   /**
@@ -897,107 +552,15 @@ export class FlightMapCard extends LitElement {
     );
   }
 
-  private _startMotion(): void {
-    if (this._motionTimer !== undefined) return;
-    this._lastStepAt = 0;
-    this._motionTimer = window.setInterval(() => this._stepMotion(), MOTION_STEP_MS);
-  }
-
-  private _stopMotion(): void {
-    if (this._motionTimer === undefined) return;
-    window.clearInterval(this._motionTimer);
-    this._motionTimer = undefined;
-    // Leave no armed transitions behind. Stopping can mean the mode changed
-    // under the card -- a config edit, or the reader turning reduced-motion on
-    // -- and a leftover transition would animate the very next fix, which is
-    // exactly what the mode they just chose says not to do.
-    for (const marker of this._markers.values()) {
-      const element = marker.getElement();
-      if (element) element.style.transition = "";
-    }
-  }
-
-  /**
-   * Fly every predicted aircraft one step.
-   *
-   * Each marker is aimed at where it will be one step from NOW and given a
-   * transition of exactly one step, so the browser draws the in-between frames
-   * itself. That is what makes a once-a-second timer enough for motion that
-   * looks continuous.
-   *
-   * A step that arrives late -- a backgrounded tab, a throttled timer, a long
-   * main-thread stall -- would otherwise animate the whole catch-up across the
-   * map as one slow slide. Past two steps the correction is applied without a
-   * transition instead: an aircraft that is somewhere else should be redrawn
-   * there, not seen travelling there.
-   */
-  private _stepMotion(): void {
-    const now = Date.now();
-    // Neither early return advances the clock, and that is the point: whatever
-    // comes next is then correctly seen as late and redraws instead of sliding.
-    // A hidden tab still fires this timer (throttled to about this interval),
-    // so without that it would come back believing it had never missed a step
-    // and animate minutes of flight across the map in one second.
-    if (now < this._zoomingUntil) return;
-    if (document.hidden || !this._markers.size) return;
-
-    const late = this._lastStepAt !== 0 && now - this._lastStepAt > MOTION_STEP_MS * 2;
-    this._lastStepAt = now;
-    const target = now + MOTION_STEP_MS;
-
-    for (const [id, marker] of this._markers) {
-      const step = this._motion.step(id, target);
-      if (!step) continue;
-      const [lat, lon] = projectKm([step.fromLat, step.fromLon], step.bearing, step.km);
-      const element = marker.getElement();
-      if (element) {
-        element.style.transition = late ? "" : `transform ${MOTION_STEP_MS}ms linear`;
-      }
-      marker.setLatLng([lat + step.residualLat, lon + step.residualLon]);
-    }
-  }
-
-  /** Hand the markers back to Leaflet for the length of a zoom. */
-  private _suspendForZoom(): void {
-    this._zoomingUntil = Date.now() + ZOOM_GUARD_MS;
-    this._endGlide();
-    for (const marker of this._markers.values()) {
-      const element = marker.getElement();
-      if (element) element.style.transition = "";
-    }
-  }
-
-  private _selectedTrackStyle(style: AircraftIconStyle): Record<string, unknown> {
-    return {
-      color: style.selectedColor,
-      weight: SELECTED_TRACK_WEIGHT,
-      opacity: SELECTED_TRACK_OPACITY,
-    };
-  }
-
-  /** A small marker at the centre of the watched area. */
-  private _drawAreaCentre(leaflet: LeafletLike): void {
+  /** A small marker at the centre of the watched area, or none. */
+  private _drawAreaCentre(): void {
     const bounds = this._bounds();
-    if (!bounds || !this._baseLayer || !this._config?.show_area_center) return;
-    const at = boundsCenter(bounds);
-
-    if (this._centreMarker) {
-      this._centreMarker.setLatLng(at);
-      return;
-    }
-
-    this._centreMarker = leaflet
-      .circleMarker(at, {
-        radius: 5,
-        weight: 2,
-        color: this._themeColor("--primary-color", "#03a9f4"),
-        fillColor: this._themeColor("--card-background-color", "#ffffff"),
-        fillOpacity: 1,
-        // Non-interactive so a click or drag that starts here still pans the
-        // map, and so it can never steal a tap meant for an aircraft.
-        interactive: false,
-      })
-      .addTo(this._baseLayer);
+    const show = !!bounds && !!this._config?.show_area_center;
+    this._layer?.setCentre(
+      show ? boundsCenter(bounds) : null,
+      this._themeColor("--primary-color", "#03a9f4"),
+      this._themeColor("--card-background-color", "#ffffff")
+    );
   }
 
   /**
@@ -1013,10 +576,6 @@ export class FlightMapCard extends LitElement {
     // No bounds: leave ha-map on its own home-centred view rather than fitting
     // to something invented.
     if (!bounds) return;
-    // Leaflet caches its container size and only re-reads it when told to, so a
-    // frame that has just been laid out would otherwise be fitted at the size
-    // it had before.
-    leafletMapOf(el)?.invalidateSize(false);
     // A positive offset tightens the fit by whole zoom levels; see
     // padForZoomOffset for why this is padding rather than a zoom assignment.
     const offset = this._config?.zoom_offset ?? DEFAULTS.zoom_offset;
@@ -1045,11 +604,9 @@ export class FlightMapCard extends LitElement {
         Map unavailable — Home Assistant's map component did not load.
       </div>`;
     }
-    // `_forceLeaflet`: 2026.10's ha-map defaults to MapLibre, and every layer
-    // this card draws is a Leaflet one -- see fact 5 in ha-map.ts.
     return html`
       <div class="map-wrap" style=${frame}>
-        <ha-map ._forceLeaflet=${true} .autoFit=${false} .themeMode=${this._config?.theme_mode ?? DEFAULTS.theme_mode}></ha-map>
+        <ha-map .autoFit=${false} .themeMode=${this._config?.theme_mode ?? DEFAULTS.theme_mode}></ha-map>
         <button class="recentre" title="Recentre on the watched area" @click=${this._onRecentre}>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d=${RECENTRE_PATH}></path></svg>
         </button>
