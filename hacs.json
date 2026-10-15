@@ -1,5 +1,6 @@
 {
   "name": "Flight Map Card",
   "render_readme": true,
-  "filename": "flight-map-card.js"
+  "filename": "flight-map-card.js",
+  "homeassistant": "2026.10.0"
 }

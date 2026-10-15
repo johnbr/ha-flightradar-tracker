@@ -39,8 +39,8 @@ export const cardStyles = css`
   /*
    * The map's frame. Position is relative only so the recentre control can sit
    * over it -- nothing here may touch the map's own gesture handling. In
-   * particular: never set touch-action on or around the map. Leaflet manages
-   * its own touch handling, and "touch-action: none" is what cost the
+   * particular: never set touch-action on or around the map. The map engine
+   * manages its own touch handling, and "touch-action: none" is what cost the
    * air-quality card pinch-zoom across the whole dashboard.
    */
   .map-wrap,
@@ -74,7 +74,7 @@ export const cardStyles = css`
     position: absolute;
     top: 8px;
     right: 8px;
-    /* Leaflet's own controls sit at 800; this has to clear them. */
+    /* Leaflet's controls sit at 800 (MapLibre's far lower); clear both. */
     z-index: 900;
     display: flex;
     align-items: center;

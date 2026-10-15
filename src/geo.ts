@@ -17,7 +17,7 @@ export interface AreaBounds {
  *
  * The integration publishes it as a single comma-separated string in
  * **N,S,W,E** order -- e.g. `"34.174085,33.724427,-117.844108,-117.302035"` --
- * which is neither Leaflet's corner-pair order nor GeoJSON's. Getting the order
+ * which is neither `ha-map`'s corner-pair order nor GeoJSON's. Getting the order
  * wrong does not throw: it silently produces a box somewhere in the Southern
  * Ocean, so the order is asserted in the tests rather than trusted.
  *
@@ -46,7 +46,7 @@ export function parseBounds(raw: unknown): AreaBounds | null {
   };
 }
 
-/** The two corners Leaflet's `fitBounds` wants. */
+/** The two corners `ha-map.fitBounds` wants. */
 export function boundsCorners(bounds: AreaBounds): [LatLon, LatLon] {
   return [
     [bounds.north, bounds.west],
@@ -162,12 +162,13 @@ export function airportPosition(lat: number | null, lon: number | null): LatLon 
  * The `pad` that fits the watched area `offset` zoom levels tighter than
  * `basePad` alone would.
  *
- * `ha-map` fits `latLngBounds(corners).pad(pad)`, so the span it must fit is
- * `(1 + 2 * pad)` times the watched box, and one zoom level is exactly a
- * halving of that span. Solving `(1 + 2 * p) = (1 + 2 * basePad) * 2^-offset`
- * therefore lands exactly `offset` INTEGER levels in: Leaflet floors the
- * continuous fit to a whole zoom, and `floor(z + n) === floor(z) + n` for
- * integer `n`.
+ * Both of `ha-map`'s engines pad the corners by `pad` on each side, so the
+ * span they must fit is `(1 + 2 * pad)` times the watched box, and one zoom
+ * level is exactly a halving of that span. Solving
+ * `(1 + 2 * p) = (1 + 2 * basePad) * 2^-offset` therefore lands exactly
+ * `offset` levels in on either engine: MapLibre fits continuously, and the
+ * Leaflet fallback floors to a whole zoom, where `floor(z + n) === floor(z) + n`
+ * for integer `n`.
  *
  * Expressed as padding rather than by reading the resulting zoom back and
  * adding to it, for two reasons that are both real:
@@ -176,7 +177,7 @@ export function airportPosition(lat: number | null, lon: number | null): LatLon 
  *    and re-queues the whole fit when the map has no layout yet, so the zoom
  *    immediately afterwards can still be the previous view's.
  * 2. Assigning `el.zoom` would ALSO cap every later fit. `ha-map` passes that
- *    property straight through as Leaflet's `maxZoom`
+ *    property straight through as the engine's `maxZoom`
  *    (`{maxZoom: options?.zoom || this.zoom}`), so a zoom stored to bias one
  *    fit silently becomes a ceiling on the next one.
  *

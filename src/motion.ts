@@ -165,7 +165,7 @@ interface Tracked {
 /**
  * Keeps one fix per aircraft and says where each one should be drawn.
  *
- * Deliberately holds no DOM and no Leaflet: it is arithmetic over time, which
+ * Deliberately holds no DOM and no map engine: it is arithmetic over time, which
  * is the part worth having tests for.
  */
 export class MotionTracker {

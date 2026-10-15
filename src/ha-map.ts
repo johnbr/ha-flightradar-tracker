@@ -1,13 +1,13 @@
 /**
- * Borrowing Home Assistant's own `<ha-map>` instead of bundling Leaflet.
+ * Borrowing Home Assistant's own `<ha-map>` instead of bundling a map library.
  *
  * `ha-map` is the element behind the built-in Map card, so the tiles, the
  * dark-mode handling and the pan/zoom behaviour are the ones the rest of the
  * dashboard already has -- at no cost to this bundle, and with no API key.
  *
- * Four facts about it drive everything in this file. All four were re-checked
- * against the running frontend chunk (2026.8, `frontend_latest/52451.*.js`),
- * not taken from documentation.
+ * Facts 1-4 were checked against the running frontend chunk (2026.8,
+ * `frontend_latest/52451.*.js`), fact 5 against 2026.10.1 (`49854.*.js`), not
+ * taken from documentation.
  *
  * 1. **It is lazily loaded.** On a dashboard with no Map card the tag is an
  *    inert unknown element. The only supported way to pull the chunk in is to
@@ -26,127 +26,44 @@
  *    && this.fitMap()`. With no entities, zones or `layers`, `fitMap()` takes an
  *    early return that centres on the *home* coordinates at zoom 14. So a fit
  *    performed before `_loaded` is true gets silently overwritten by that.
- *    `whenMapReady()` therefore waits for `_loaded`, not just for Leaflet.
+ *    `whenEngineReady()` therefore waits for `_loaded`, not just for an engine.
  *
- * 4. **`disconnectedCallback()` destroys the map** -- `leafletMap.remove()`,
- *    then `leafletMap`, `Leaflet` and `_loaded` are cleared. Anything added
- *    straight to the Leaflet instance dies with it, so callers must key their
- *    own layers on the *instance* and rebuild when it changes, never on the
- *    element.
+ * 4. **`disconnectedCallback()` destroys the map** and clears `_loaded`.
+ *    Everything drawn on it dies with it, so callers must key their own
+ *    markers on the *engine instance* and rebuild when it changes, never on
+ *    the element.
  *
- * 5. **Since 2026.10 the element is not a Leaflet map at all.** It wraps a
- *    pluggable `_engine` and DEFAULTS TO MAPLIBRE (vector tiles), using the
- *    `LeafletMapEngine` only when WebGL is unavailable or `_forceLeaflet` is
- *    set. `Leaflet` / `leafletMap` moved off the element onto that engine, so
- *    a card reading `el.Leaflet` waited out READY_TIMEOUT_MS and silently drew
- *    nothing over a perfectly good basemap. Everything below is written
- *    against Leaflet, so the card sets `_forceLeaflet` before the element
- *    connects (it is a constructor-initialised field read in `_loadMap()`, so
- *    a Lit property binding lands in time) and reads both through
- *    `leafletOf()` / `leafletMapOf()`, which still accept the pre-2026.10
- *    element. Re-checked against `frontend_latest/49854.*.js` +
- *    `8200.*.js` (2026.10.0). Facts 3 and 4 still hold there: `_loaded` flips
- *    once the engine is up and the `_loaded` re-fit is unchanged, and
- *    `disconnectedCallback()` now calls `_engine.destroy()`, which removes the
- *    Leaflet map exactly as before.
+ * 5. **Since 2026.10 the element is an engine wrapper.** It holds a pluggable
+ *    `_engine` -- MapLibre (vector tiles) by default, Leaflet only when WebGL
+ *    is unavailable or after the MapLibre engine dies -- and both engines
+ *    implement the same drawing API, which is what the card draws through
+ *    (see engine.ts). Facts 3 and 4 hold for both: `_loaded` flips once the
+ *    engine is up, and `disconnectedCallback()` calls `_engine.destroy()`. A
+ *    WebGL context loss also swaps the engine for a Leaflet one in place, so
+ *    the card has to notice `_engine` changing even while it stays connected.
  *
- * 6. **The binding is not enough on its own.** On the Pixel Tablet's Companion
- *    WebView (Chrome 153, HA 2026.10.1) a probe found the card's `ha-map` with
- *    `_forceLeaflet === false` and a MapLibre engine: the header counted the
- *    aircraft, the vector basemap drew, and not one marker did -- while every
- *    headless Chromium run of the same page had the flag set. `_forceLeaflet`
- *    is a plain constructor-initialised field, not a reactive property, so a
- *    value that lands before the element upgrades is overwritten by the
- *    constructor; that is the likeliest cause, unconfirmed. Whatever the cause,
- *    `whenMapReady()` now notices a MapLibre engine and calls ha-map's own
- *    `_handleEngineFatal()`, which sets the flag, destroys the engine and
- *    reloads on Leaflet -- the path ha-map itself takes when WebGL dies.
+ * 6. **Up to 0.5.x this card forced the Leaflet engine** (`_forceLeaflet`) and
+ *    drew raw Leaflet layers. On the Pixel Tablet that flag appeared not to
+ *    hold; the real cause was a duplicate Lovelace resource serving an older
+ *    build, and both the flag and the `_handleEngineFatal()` fallback it grew
+ *    are gone with the port.
  */
 
-/** The Leaflet surface this card uses. Grows as the milestones need more. */
-export interface LeafletLike {
-  layerGroup(layers?: LeafletLayer[]): LeafletLayerGroup;
-  circleMarker(latlng: LatLngTuple, options?: Record<string, unknown>): LeafletPathLayer;
-  marker(latlng: LatLngTuple, options?: Record<string, unknown>): LeafletMarker;
-  divIcon(options: Record<string, unknown>): LeafletDivIcon;
-  polyline(latlngs: LatLngTuple[], options?: Record<string, unknown>): LeafletPolyline;
-}
-
-export type LatLngTuple = [number, number];
-
-export interface LeafletLayer {
-  addTo(map: LeafletMap | LeafletLayerGroup): this;
-  remove(): this;
-}
-
-export interface LeafletPathLayer extends LeafletLayer {
-  setLatLng(latlng: LatLngTuple): this;
-  setStyle(style: Record<string, unknown>): this;
-  bindTooltip(content: string, options?: Record<string, unknown>): this;
-}
-
-/** Opaque to us: built by `divIcon`, handed straight back to a marker. */
-export type LeafletDivIcon = { readonly __divIcon?: never };
-
-export interface LeafletMarker extends LeafletLayer {
-  setLatLng(latlng: LatLngTuple): this;
-  /** Where the marker is DRAWN, which under predicted motion is not the fix. */
-  getLatLng(): { lat: number; lng: number };
-  setIcon(icon: LeafletDivIcon): this;
-  /** The icon's root element -- where Leaflet writes its translate3d. */
-  getElement(): HTMLElement | undefined;
-  setZIndexOffset(offset: number): this;
-  on(event: string, handler: (event: unknown) => void): this;
-}
-
-export interface LeafletPolyline extends LeafletLayer {
-  setLatLngs(latlngs: LatLngTuple[]): this;
-  setStyle(style: Record<string, unknown>): this;
-  /** Raises the line above its siblings. Used for the selected track in M4. */
-  bringToFront(): this;
-}
-
-export interface LeafletLayerGroup extends LeafletLayer {
-  addLayer(layer: LeafletLayer): this;
-  removeLayer(layer: LeafletLayer): this;
-  clearLayers(): this;
-}
-
-/** Only the members used here; `ha-map` owns the instance. */
-export interface LeafletMap {
-  invalidateSize(animate?: boolean): void;
-  panTo(latlng: LatLngTuple, options?: Record<string, unknown>): void;
-  getZoom(): number;
-  on(event: string, handler: () => void): this;
-}
-
-/** 2026.10+: what `ha-map` keeps its map on. Only the Leaflet engine has these. */
-interface MapEngineLike {
-  Leaflet?: LeafletLike;
-  leafletMap?: LeafletMap;
-}
+import type { MapEngine } from "./engine";
 
 export interface HaMapElement extends HTMLElement {
-  /** Pre-2026.10 only; see fact 5. Read through `leafletOf()`. */
-  Leaflet?: LeafletLike;
-  /** Pre-2026.10 only; see fact 5. Read through `leafletMapOf()`. */
-  leafletMap?: LeafletMap;
-  /** 2026.10+: the engine, and the switch that makes it a Leaflet one. */
-  _engine?: MapEngineLike;
-  _forceLeaflet?: boolean;
-  /**
-   * 2026.10+: ha-map's own MapLibre-failed path -- sets `_forceLeaflet`,
-   * destroys the engine and reloads on Leaflet. A no-op once the flag is set.
-   */
-  _handleEngineFatal?: () => void;
-  /** Its own "Leaflet is up" flag. See fact 3. */
+  /** 2026.10+: the drawing engine. See fact 5. */
+  _engine?: MapEngine;
+  /** Its own "engine is up" flag. See fact 3. */
   _loaded?: boolean;
-  layers?: LeafletLayer[];
   autoFit?: boolean;
   zoom?: number;
   themeMode?: "auto" | "light" | "dark";
   /** `zoom` in the options is a MAX zoom, not a target. Default pad is 0.5. */
-  fitBounds(latlngs: LatLngTuple[], options?: { pad?: number; zoom?: number }): void;
+  fitBounds(latlngs: [number, number][], options?: { pad?: number; zoom?: number }): void;
+  panTo(latlng: [number, number]): void;
+  /** Centre and zoom, the zoom on Leaflet's scale whichever engine draws. */
+  getView(): { center: [number, number]; zoom: number } | undefined;
   updateComplete: Promise<unknown>;
 }
 
@@ -163,7 +80,7 @@ declare global {
 /** Ceiling on waiting for the lazy chunk. */
 const LOAD_TIMEOUT_MS = 10_000;
 
-/** Ceiling on waiting for that element to bring Leaflet up. */
+/** Ceiling on waiting for that element to bring its engine up. */
 const READY_TIMEOUT_MS = 5_000;
 const READY_POLL_MS = 50;
 
@@ -199,38 +116,18 @@ export async function ensureHaMap(): Promise<boolean> {
   return haMapPromise;
 }
 
-/** The Leaflet namespace, on either generation of `ha-map`. */
-export function leafletOf(el: HaMapElement): LeafletLike | undefined {
-  return el._engine?.Leaflet ?? el.Leaflet;
-}
-
-/** The Leaflet instance our own layers go on, on either generation. */
-export function leafletMapOf(el: HaMapElement): LeafletMap | undefined {
-  return el._engine?.leafletMap ?? el.leafletMap;
-}
-
 /**
- * Resolve once the element has Leaflet up *and* has flipped its own `_loaded`.
+ * Resolve with the engine once the element has one up *and* has flipped its
+ * own `_loaded`.
  *
- * Waiting on `.Leaflet` alone is not enough -- see fact 3. Returns undefined if
+ * Waiting on the engine alone is not enough -- see fact 3. Returns undefined if
  * the map never comes up, which the caller must render as a failure rather than
  * an endless "Loading…".
  */
-export async function whenMapReady(el: HaMapElement): Promise<LeafletLike | undefined> {
-  let deadline = Date.now() + READY_TIMEOUT_MS;
-  while ((!leafletOf(el) || !el._loaded) && Date.now() < deadline) {
-    if (el._loaded && el._engine && !leafletOf(el) && !el._forceLeaflet) {
-      // Fact 6: the `_forceLeaflet` binding was lost and MapLibre came up.
-      // Hand it to ha-map's own fallback, which reloads on Leaflet, and give
-      // that reload a fresh timeout. Called BEFORE touching the flag -- the
-      // method is a no-op once it is set.
-      console.warn("flight-map-card: ha-map came up on MapLibre; switching it to Leaflet");
-      if (el._handleEngineFatal) el._handleEngineFatal();
-      else el._forceLeaflet = true;
-      deadline = Date.now() + READY_TIMEOUT_MS;
-    }
+export async function whenEngineReady(el: HaMapElement): Promise<MapEngine | undefined> {
+  const deadline = Date.now() + READY_TIMEOUT_MS;
+  while (!(el._loaded && el._engine) && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, READY_POLL_MS));
   }
-  // A MapLibre engine (fact 5) comes up `_loaded` with no Leaflet: undefined.
-  return el._loaded ? leafletOf(el) : undefined;
+  return el._loaded ? el._engine : undefined;
 }

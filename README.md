@@ -24,8 +24,10 @@ obscured nor resized when a flight is selected.
 
 Three deliberate choices:
 
-- **The map is Home Assistant's own bundled Leaflet** (`ha-map`, the element behind the
-  built-in Map card). No API key, no CDN fetch, theme-aware, and no bytes added to the bundle.
+- **The map is Home Assistant's own `ha-map`** (the element behind the built-in Map card).
+  Since Home Assistant 2026.10 that is MapLibre vector tiles, falling back to Leaflet where
+  WebGL is unavailable, and the card draws on whichever one it gets. No API key, no CDN
+  fetch, theme-aware, and no bytes added to the bundle.
 - **Map plus detail only.** There is no flight list — the map *is* the list.
 - **Configuration is validated strictly.** An unknown key, or a known key with a bad value,
   throws. The card is deliberately not built on silent fallbacks, where a typo becomes the
@@ -56,6 +58,9 @@ Three deliberate choices:
 - **Imperial by default**, because the sensor is metric and the house is not. Configurable.
 
 ## Installation
+
+Requires **Home Assistant 2026.10 or later**: the card draws through the map-engine API
+`ha-map` gained in that release. Version 0.5.x is the last that runs on earlier releases.
 
 ### HACS (custom repository)
 
