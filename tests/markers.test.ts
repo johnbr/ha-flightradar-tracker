@@ -96,7 +96,7 @@ test("theme colours cannot break out of the markup", () => {
   // are interpolated into attributes, and a quote would silently mangle the
   // whole icon rather than fail loudly.
   const html = aircraftIconHtml(shape(), { ...STYLE, color: '"><script>x</script>' });
-  assert.doesNotMatch(html, /<script>/);
+  assert.doesNotMatch(html, /<script>/i);
 });
 
 test("a light aircraft and a jet draw different shapes", () => {
