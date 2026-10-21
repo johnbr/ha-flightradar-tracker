@@ -9,6 +9,11 @@ It is fed entirely by the
 area sensor: one attribute, on one entity, so this is a pure frontend plugin with no Python
 side and nothing to configure on the backend.
 
+<img src="https://raw.githubusercontent.com/johnbr/ha-flightradar-tracker/main/docs/flight-map-card.png" alt="Flight Map Card: aircraft over a city map with their tracks, and the detail panel for a United 737 showing its route, times, progress and telemetry" width="560">
+
+<sub>Real traffic, moved to another city for the picture, with the aircraft photo
+turned off (`show_photo: false`); by default the panel shows one.</sub>
+
 ## Why another flight card
 
 Two cards already exist and each does half the job:
@@ -62,24 +67,30 @@ Three deliberate choices:
 Requires **Home Assistant 2026.10 or later**: the card draws through the map-engine API
 `ha-map` gained in that release. Version 0.5.x is the last that runs on earlier releases.
 
-### HACS (custom repository)
+### HACS
 
-1. HACS → ⋮ → **Custom repositories**
-2. Repository `https://github.com/johnbr/ha-flightradar-tracker`, category **Dashboard**
-3. Install, then reload the browser.
+[![Open this repository in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=johnbr&repository=ha-flightradar-tracker&category=plugin)
+
+1. In HACS, search for **Flight Map Card** and download it (or use the button above).
+2. Reload the browser.
+
+If HACS doesn't list it yet, add it as a custom repository instead: HACS → **⋮** →
+**Custom repositories** → `https://github.com/johnbr/ha-flightradar-tracker`, category
+**Dashboard**, then continue from step 1.
 
 ### Manual
 
-Copy `dist/flight-map-card.js` to `<config>/www/community/flight-map-card/` and add it as a
+Copy `dist/flight-map-card.js` to `<config>/www/` and add `/local/flight-map-card.js` as a
 Lovelace resource of type **JavaScript Module**, with a `?v=` query string you bump on every
 update — a cached module shows up as Home Assistant's generic "Configuration error", with
-nothing on screen naming the cache.
+nothing on screen naming the cache. Keep it out of `<config>/www/community/`: that directory
+belongs to HACS, which serves it as `/hacsfiles/` only when HACS is installed, and overwrites
+it on every update.
 
 **Pick one, not both.** A HACS install serves the card from `/hacsfiles/…` and a manual one
-from `/local/community/…`; two registered resources means two copies of the element racing to
-register the same tag name. If you are editing the source, the manual path is the one that
-lets you deploy a build without cutting a release — and note that HACS overwrites its own
-copy on every update, so a hand-edited file under a HACS-managed directory does not survive.
+from `/local/…`; two registered resources means two copies of the element racing to register
+the same tag name. If you are editing the source, the manual path is the one that lets you
+deploy a build without cutting a release.
 
 ## Configuration
 
@@ -100,6 +111,18 @@ title: Flights overhead
 | `motion` | string | `predicted` | How the aircraft move between fixes: `predicted`, `glide`, `none` — see below |
 | `show_airports` | bool | `true` | Draw the airports the overhead traffic is flying between — see below |
 | `icon_size` | number | `28` | Aircraft icon box in px (12–72) |
+| `show_tracks` | boolean | `false` | Draw each aircraft's recent track. Off by default — at ~30 aircraft, mostly circuit traffic, the overlapping trails read as scribble |
+| `show_area_center` | boolean | `true` | Mark the centre of the watched area |
+| `show_photo` | boolean | `true` | Show the aircraft photo in the detail panel |
+| `units.altitude` | `ft` \| `m` | `ft` | |
+| `units.speed` | `mph` \| `kts` \| `kmh` | `mph` | |
+| `units.distance` | `mi` \| `km` \| `nm` | `mi` | |
+
+There is a visual editor, so none of this has to be typed by hand.
+
+**Every option is validated and a bad value throws** — an unknown key, a number
+out of range, `show_tracks: "false"` (a truthy string), or `units.distance: miles`
+all produce a card that says what is wrong. Nothing silently becomes a default.
 
 ### About `show_airports`
 
@@ -204,18 +227,6 @@ this option existed.
 
 It moves the fit by *whole* zoom levels, so a fractional value is rejected rather than quietly
 rounded. `zoom` (a fixed zoom) overrides it entirely.
-| `show_tracks` | boolean | `false` | Draw each aircraft's recent track. Off by default — at ~30 aircraft, mostly circuit traffic, the overlapping trails read as scribble |
-| `show_area_center` | boolean | `true` | Mark the centre of the watched area |
-| `show_photo` | boolean | `true` | Show the aircraft photo in the detail panel |
-| `units.altitude` | `ft` \| `m` | `ft` | |
-| `units.speed` | `mph` \| `kts` \| `kmh` | `mph` | |
-| `units.distance` | `mi` \| `km` \| `nm` | `mi` | |
-
-There is a visual editor, so none of this has to be typed by hand.
-
-**Every option is validated and a bad value throws** — an unknown key, a number
-out of range, `show_tracks: "false"` (a truthy string), or `units.distance: miles`
-all produce a card that says what is wrong. Nothing silently becomes a default.
 
 ### Which entity
 
@@ -246,18 +257,11 @@ importing a Lit-decorated module fails to parse before any assertion runs.
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
 
 ## Notes on the data
 
-Four of the integration's sensors carry the `flights` array and are all valid targets:
-`current_in_area`, `entered_area`, `exited_area` and `additional_tracked`. The `airport_*`
-sensors are **not** — their `flights` attribute is arrivals/departures rows and renders
-nonsense.
-
-The array is `_unrecorded_attributes` upstream, so it costs no recorder churn — and equally
-there is no history to draw from. Each aircraft's `coordinates` array is the only possible
-source of a track.
+See [Which entity](#which-entity) for which sensors to point the card at.
 
 `flights[]` is the coordinator's insertion order, not distance order, so `flights[0]` is
 whichever aircraft entered the box first. This card sorts nearest-first before doing anything

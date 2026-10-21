@@ -24,9 +24,6 @@ jobs:
       - uses: hacs/action@main
         with:
           category: plugin
-          # `brands`: dropped once the home-assistant/brands PR lands.
-          # `images`: dropped once a real screenshot is added to README.
-          ignore: brands images
 
   build:
     name: Build
